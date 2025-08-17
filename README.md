@@ -2,6 +2,8 @@
 
 A collection of utility nodes for ComfyUI that enhance workflow capabilities with advanced loaders and processing tools.
 
+![ComfyUI Silver Nodes](readme/Nodes.png)
+
 ## Features
 
 Silver Nodes provides several specialized nodes designed to improve your ComfyUI workflows:
@@ -13,9 +15,10 @@ Load images directly from URLs with cache busting and duplicate prevention.
 - **Features**:
   - Cache busting with random query parameters
   - Duplicate detection using content hashing
-  - Retry mechanism for failed downloads
+  - Retry mechanism for failed downloads (5 attempts by default)
   - Supports common image formats (JPEG, PNG, WebP, etc.)
   - Tracks previously loaded images to avoid duplicates
+  - **Important**: If image loading fails after all retry attempts, the entire workflow execution will be skipped to prevent partial processing
 
 #### Silver Web Image Loader
 Extract and download images from webpages with smart selection.
@@ -45,8 +48,11 @@ Load and process video frames with audio extraction.
   - Frame skipping and batching
   - Memory-efficient processing
 
-#### Silver File Text Loader
+#### Silver File Text Loader (Beta)
 Load and process text files with encoding detection.
+
+> ⚠️ **Note**: This node is currently in beta and has not been fully tested. Some edge cases may not be handled correctly.
+
 - **Features**:
   - Automatic encoding detection
   - Support for multiple text formats (TXT, JSON, CSV, etc.)
@@ -246,12 +252,6 @@ house:home:apartment:building
 3. Choose split mode based on how your prompts are formatted
 4. Set action to "increment" to use a different prompt each run
 5. Connect the text output to your prompt input
-
-### Memory-Efficient Batch Processing
-
-1. Add the Silver Batch VAE Decoder after your VAE-using nodes
-2. Set an appropriate batch size based on your VRAM
-3. Connect to downstream image processing nodes
 
 ## Contributing
 
