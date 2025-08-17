@@ -1,0 +1,15 @@
+# Core Dependencies
+beautifulsoup4>=4.11.1  # For web scraping and HTML parsing
+moviepy>=1.0.3          # For video and audio processing
+numpy>=1.21.0           # For numerical operations
+Pillow>=9.0.0           # For image processing
+opencv-python-headless>=4.5.0  # For image/video processing
+requests>=2.28.1        # For HTTP requests
+torch>=1.9.0            # PyTorch for deep learning
+urllib3>=1.26.9         # For URL handling
+
+# Development Dependencies (optional)
+# black>=21.12b0        # Code formatter
+# flake8>=4.0.0         # Linter
+# pytest>=6.2.5         # Testing framework
+# types-requests>=2.28.0 # Type stubs for requests
