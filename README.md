@@ -11,22 +11,20 @@ Silver Nodes provides several specialized nodes designed to improve your ComfyUI
 ### Loading Nodes
 
 #### Silver URL Image Loader
-Load images directly from URLs with cache busting and duplicate prevention.
+Load images directly from URLs with cache busting and duplicate prevention. Designed to work with /random/ URLs for img2img processing.
 - **Features**:
-  - Cache busting with random query parameters
+  - Cache busting with random query parameters to prevent caching
   - Duplicate detection using content hashing
   - Retry mechanism for failed downloads (5 attempts by default)
   - Supports common image formats (JPEG, PNG, WebP, etc.)
   - Tracks previously loaded images to avoid duplicates
-  - **Important**: If image loading fails after all retry attempts, the entire workflow execution will be skipped to prevent partial processing
+  - **Note**: If image loading fails after all retry attempts, the entire workflow execution will be skipped to prevent partial processing
 
 #### Silver Web Image Loader
-Extract and download images from webpages with smart selection.
+Extract and download images from webpages with smart selection. Optimized for /random/ URL endpoints that serve random images.
 - **Features**:
   - Analyzes webpage for images with size information
-  - Filters out icons, buttons, and other small graphics
-  - Excludes common non-content images (logos, ads, etc.)
-  - Supports multiple image selection strategies
+  - Filters out non-content images (icons, buttons, logos, ads, etc.)
   - Handles lazy-loaded images and responsive designs
   - Note: "Largest" is determined by HTML attributes, not actual download size
 
@@ -90,42 +88,11 @@ Fetch random images from Flickr based on search criteria.
 
 ### Core Features
 
-#### Efficient Resource Management
-- Memory-efficient loading and processing
-- Configurable caching strategies
-- Automatic cleanup of temporary files
-- Resource pooling for high-throughput workflows
-
-#### Batch Processing
-- Configurable batch sizes
-- Parallel processing support
-- Progress tracking
-- Memory usage monitoring
-
-#### Sequential Processing
-- Multiple iteration strategies:
-  - Sequential (forward/backward)
-  - Random access
-  - Loop around
-  - Fixed position
-- State preservation between executions
-
-#### Sorting Options
-- Sort by:
-  - Filename (alphabetical)
-  - Creation date
-  - Modification date
-  - File size
-  - Custom criteria
-- Ascending/descending order
-- Natural sorting for numbered files
-
-#### Error Handling
-- Graceful degradation
-- Detailed error messages
-- Retry mechanisms
-- Fallback strategies
-- Logging and reporting
+- **Resource Management**: Memory-efficient loading with configurable caching and automatic cleanup
+- **Batch Processing**: Parallel processing with progress tracking and memory monitoring
+- **Sequential Processing**: Multiple iteration strategies with state preservation
+- **Sorting Options**: Sort by various file attributes with natural sorting support
+- **Error Handling**: Graceful degradation with detailed logging and retry mechanisms
 
 ## Installation
 
