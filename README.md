@@ -7,26 +7,119 @@ A collection of utility nodes for ComfyUI that enhance workflow capabilities wit
 Silver Nodes provides several specialized nodes designed to improve your ComfyUI workflows:
 
 ### Loading Nodes
-- **Silver URL Image Loader**: Load images directly from URLs with cache busting and duplicate prevention
-- **Silver Web Image Loader**: Extract the largest image from a webpage
-- **Silver Folder Image Loader**: Load images from folders with advanced sorting and batching
-- **Silver Folder Video Loader**: Load and process video frames with audio extraction
-- **Silver File Text Loader**: Load and process text files with encoding detection
-- **Silver Folder File Path Loader**: Get file paths from folders with regex filtering
+
+#### Silver URL Image Loader
+Load images directly from URLs with cache busting and duplicate prevention.
+- **Features**:
+  - Cache busting with random query parameters
+  - Duplicate detection using content hashing
+  - Retry mechanism for failed downloads
+  - Supports common image formats (JPEG, PNG, WebP, etc.)
+  - Tracks previously loaded images to avoid duplicates
+
+#### Silver Web Image Loader
+Extract and download images from webpages with smart selection.
+- **Features**:
+  - Analyzes webpage for images with size information
+  - Filters out icons, buttons, and other small graphics
+  - Excludes common non-content images (logos, ads, etc.)
+  - Supports multiple image selection strategies
+  - Handles lazy-loaded images and responsive designs
+  - Note: "Largest" is determined by HTML attributes, not actual download size
+
+#### Silver Folder Image Loader
+Load images from folders with advanced sorting and batching.
+- **Features**:
+  - Batch loading of multiple images
+  - Sorting by name, date modified, or file size
+  - Sequential or random access patterns
+  - Recursive directory scanning
+  - Image format detection and filtering
+
+#### Silver Folder Video Loader
+Load and process video frames with audio extraction.
+- **Features**:
+  - Frame extraction with configurable frame rate
+  - Audio track extraction
+  - Support for common video formats (MP4, AVI, MOV, etc.)
+  - Frame skipping and batching
+  - Memory-efficient processing
+
+#### Silver File Text Loader
+Load and process text files with encoding detection.
+- **Features**:
+  - Automatic encoding detection
+  - Support for multiple text formats (TXT, JSON, CSV, etc.)
+  - Line or paragraph splitting
+  - Large file handling
+  - Error handling for malformed files
+
+#### Silver Folder File Path Loader
+Get file paths from folders with regex filtering.
+- **Features**:
+  - Recursive directory scanning
+  - Regex pattern matching
+  - Sorting and filtering options
+  - Batch processing support
+  - File type filtering
 
 ### Processing Nodes
-- **Silver String Replacer**: Perform text replacements using pattern matching
+- **Silver String Replacer**: Perform text replacements using pattern matching with support for random selection from multiple alternatives
 - **Silver Lora Model Loader**: Advanced LORA model loading with filtering and cycling
 
 ### Media Nodes
-- **Silver Flickr Random Image**: Fetch random images from Flickr with search criteria
+
+#### Silver Flickr Random Image
+Fetch random images from Flickr based on search criteria.
+- **Features**:
+  - Search by keywords, date ranges, and orientation
+  - Safe search filtering
+  - Duplicate prevention
+  - Configurable image quality
+  - Attribution handling
+- **Requirements**:
+  - Requires a valid Flickr API key
+  - Respects Flickr's rate limits
+  - Includes proper attribution in output
 
 ### Core Features
-- **Efficient Resource Management**: Load and process resources with fine-grained control
-- **Batch Processing**: Handle multiple images or models with configurable batch sizes
-- **Sequential Processing**: Automatically increment through collections with various strategies
-- **Sorting Options**: Organize resources by different criteria
-- **Error Handling**: Graceful handling of missing or invalid resources
+
+#### Efficient Resource Management
+- Memory-efficient loading and processing
+- Configurable caching strategies
+- Automatic cleanup of temporary files
+- Resource pooling for high-throughput workflows
+
+#### Batch Processing
+- Configurable batch sizes
+- Parallel processing support
+- Progress tracking
+- Memory usage monitoring
+
+#### Sequential Processing
+- Multiple iteration strategies:
+  - Sequential (forward/backward)
+  - Random access
+  - Loop around
+  - Fixed position
+- State preservation between executions
+
+#### Sorting Options
+- Sort by:
+  - Filename (alphabetical)
+  - Creation date
+  - Modification date
+  - File size
+  - Custom criteria
+- Ascending/descending order
+- Natural sorting for numbered files
+
+#### Error Handling
+- Graceful degradation
+- Detailed error messages
+- Retry mechanisms
+- Fallback strategies
+- Logging and reporting
 
 ## Installation
 
@@ -111,6 +204,40 @@ Loads text from files with options for splitting and sequential selection.
 3. Configure batch size and sorting options
 4. Set action to "increment" to process images sequentially
 5. Connect the image output to your processing nodes
+
+### Using the String Replacer
+
+The Silver String Replacer node allows you to perform text substitutions with support for random selection from multiple alternatives.
+
+#### Pattern Format
+
+Each replacement rule is defined on a new line in the format:
+```
+search_term:replacement_1:replacement_2:replacement_3:...
+```
+- The first part is the text to search for
+- Subsequent parts (after colons) are possible replacements
+- One replacement is randomly selected when a match is found
+
+#### Example 1: Simple Replacement
+```
+dog:cat
+```
+- Replaces all occurrences of "dog" with "cat"
+
+#### Example 2: Multiple Replacements
+```
+dog:cat:puppy:wolf
+```
+- Randomly replaces "dog" with either "cat", "puppy", or "wolf"
+
+#### Example 3: Multiple Rules
+```
+dog:cat:puppy:wolf
+house:home:apartment:building
+```
+- Replaces "dog" with a random animal
+- Replaces "house" with a random dwelling
 
 ### Using Text Prompts from a File
 
