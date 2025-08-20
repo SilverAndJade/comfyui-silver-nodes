@@ -3,3 +3,4 @@ history/
 *.old
 *.bak
 *test.py
+lora_cache/*

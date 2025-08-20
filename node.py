@@ -77,15 +77,58 @@ class SilverLoraModelLoader:
     FUNCTION = "load_lora_model"
     CATEGORY = "silver"
 
+    def _get_cache_dir(self):
+        """Get the cache directory, creating it if it doesn't exist."""
+        import os
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lora_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+
+    def _get_cache_path(self, hash_value):
+        """Get the cache file path for a given hash."""
+        import os
+        return os.path.join(self._get_cache_dir(), f"{hash_value}.json")
+
+    def _load_from_cache(self, hash_value):
+        """Load Lora info from cache if it exists."""
+        import json
+        import os
+        
+        cache_path = self._get_cache_path(hash_value)
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r') as f:
+                    data = json.load(f)
+                    return data.get('tags_str', ''), data.get('example_prompts', ['']), data.get('example_images', [''])
+            except Exception as e:
+                print(f"Error loading cache for hash {hash_value}: {str(e)}")
+        return None
+
+    def _save_to_cache(self, hash_value, tags_str, example_prompts, example_images):
+        """Save Lora info to cache."""
+        import json
+        import os
+        
+        cache_path = self._get_cache_path(hash_value)
+        try:
+            with open(cache_path, 'w') as f:
+                json.dump({
+                    'tags_str': tags_str,
+                    'example_prompts': example_prompts,
+                    'example_images': example_images
+                }, f)
+        except Exception as e:
+            print(f"Error saving cache for hash {hash_value}: {str(e)}")
+
     def get_lora_info(self, lora_name):
         try:
             import hashlib
             import requests
             import os
+            import json
             
             # Get the lora file path
             lora_path = folder_paths.get_full_path("loras", lora_name)
-            print(lora_path)
             if not os.path.exists(lora_path):
                 return "", [""], [""]
                 
@@ -96,7 +139,12 @@ class SilverLoraModelLoader:
                     sha256_hash.update(chunk)
             hash_value = sha256_hash.hexdigest()
             
-            # Query CivitAI
+            # Try to load from cache first
+            cached_data = self._load_from_cache(hash_value)
+            if cached_data is not None:
+                return cached_data
+            
+            # If not in cache, query CivitAI
             api_url = f"https://civitai.com/api/v1/model-versions/by-hash/{hash_value}"
             response = requests.get(api_url)
             
@@ -112,17 +160,21 @@ class SilverLoraModelLoader:
             # Extract example prompts
             example_prompts = []
             for image in data.get("images", []):
-                if image["hasMeta"]:
+                if image.get("hasMeta"):
                     if "meta" in image and "prompt" in image["meta"]:
                         example_prompts.append(image["meta"]["prompt"])
             
             # Extract example image URLs
-            example_images = [img["url"] for img in data.get("images", []) if "url" in img and img["type"] != "video"]
+            example_images = [img["url"] for img in data.get("images", []) if "url" in img and img.get("type") != "video"]
             
             if len(example_prompts) == 0:
                 example_prompts.append("")
             if len(example_images) == 0:
                 example_images.append("")
+            
+            # Save to cache
+            self._save_to_cache(hash_value, tags_str, example_prompts, example_images)
+            
             return tags_str, example_prompts, example_images
             
         except Exception as e:
