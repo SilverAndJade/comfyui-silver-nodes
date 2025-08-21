@@ -17,6 +17,7 @@ import requests
 import hashlib
 from typing import Any, List, Tuple
 import comfy.model_management
+from collections.abc import Mapping
 
 class AnyType(str):
     def __ne__(self, __value: object) -> bool:
@@ -55,7 +56,6 @@ class SilverRandomFromList:
         random_item = random.choice(input_list)
         
         return (random_item, first_item)
-
 
 class SilverLoraModelLoader:
     @classmethod
@@ -383,6 +383,82 @@ class SilverFolderImageLoader:
 
         return {"ui": {"next_index": [next_index]}, "result": (images, filenames, next_index)}
 
+class LazyAudioMap(Mapping):
+    def __init__(self, file, start_time, duration):
+        self.file = file
+        self.start_time = start_time
+        self.duration = duration
+        self._dict = None
+        self.ffmpeg_path = "ffmpeg"  # Make sure ffmpeg is in your PATH
+    
+    def _get_audio(self):
+        import subprocess
+        import re
+        import torch
+        from torch import Tensor
+        from typing import Dict, Any
+
+        ENCODE_ARGS = ('utf-8', 'ignore')
+        
+        args = [self.ffmpeg_path, "-i", self.file]
+        if self.start_time > 0:
+            args += ["-ss", str(self.start_time)]
+        if self.duration > 0:
+            args += ["-t", str(self.duration)]
+            
+        try:
+            print(f"[LazyAudioMap] Extracting audio with ffmpeg: {' '.join(args)}")
+            res = subprocess.run(
+                args + ["-f", "f32le", "-"],
+                capture_output=True,
+                check=True
+            )
+            
+            # Convert the raw audio bytes to a PyTorch tensor
+            audio = torch.frombuffer(bytearray(res.stdout), dtype=torch.float32)
+            
+            # Parse the audio metadata from stderr
+            stderr = res.stderr.decode(*ENCODE_ARGS)
+            match = re.search(r', (\d+) Hz, (\w+), ', stderr)
+            
+            if match:
+                sample_rate = int(match.group(1))
+                channels = {"mono": 1, "stereo": 2}.get(match.group(2).lower(), 2)
+            else:
+                print("[LazyAudioMap] Could not determine audio format, using defaults")
+                sample_rate = 44100
+                channels = 2
+                
+            # Reshape the audio tensor to match expected format: [channels, samples]
+            audio = audio.reshape((-1, channels)).transpose(0, 1).unsqueeze(0)
+            
+            return {
+                'waveform': audio,
+                'sample_rate': sample_rate
+            }
+            
+        except subprocess.CalledProcessError as e:
+            print(f"[LazyAudioMap] Error extracting audio: {e.stderr.decode(*ENCODE_ARGS)}")
+            return {'waveform': None, 'sample_rate': 44100}
+        except Exception as e:
+            print(f"[LazyAudioMap] Unexpected error: {str(e)}")
+            return {'waveform': None, 'sample_rate': 44100}
+    
+    def __getitem__(self, key):
+        if self._dict is None:
+            self._dict = self._get_audio()
+        return self._dict.get(key, None)
+    
+    def __iter__(self):
+        if self._dict is None:
+            self._dict = self._get_audio()
+        return iter(self._dict)
+    
+    def __len__(self):
+        if self._dict is None:
+            self._dict = self._get_audio()
+        return len(self._dict)
+
 class SilverFolderVideoLoader:
 
     @classmethod
@@ -407,13 +483,6 @@ class SilverFolderVideoLoader:
                 "start_frame": ("INT", {
                     "default": 0,  
                     "min": 0, 
-                    "step": 1,
-                    "display": "number"
-                }),
-                "batch_size": ("INT", {
-                    "default": 1,  
-                    "min": 1, 
-                    "max": 64, 
                     "step": 1,
                     "display": "number"
                 }),
@@ -494,7 +563,7 @@ class SilverFolderVideoLoader:
 
     def _get_video_files(self, folder_path, sort_by="name", sort_order="ascending"):
         """Get sorted list of video files in the folder. Always refreshes and sorts."""
-        supported_extensions = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv']
+        supported_extensions = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm']
         try:
             files = [
                 f for f in os.listdir(folder_path)
@@ -515,22 +584,10 @@ class SilverFolderVideoLoader:
         return image
 
     def _extract_frames(self, video_path, frame_cap=0, frame_rate=0.0, start_frame=0):
-        """Extract frames and audio from video file with optional frame capping and frame rate control."""
+        """Extract frames from video file with optional frame capping and frame rate control."""
         try:
             import cv2
-            from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_audioclips
-            import numpy as np
-            
-            # First, extract audio using moviepy
-            audio = None
-            try:
-                with VideoFileClip(video_path) as video_clip:
-                    if video_clip.audio is not None:
-                        # Create a copy of the audio to avoid resource cleanup issues
-                        audio = video_clip.audio.copy()
-            except Exception as e:
-                print(f"[FolderVideoLoader] Warning: Could not extract audio from {video_path}: {e}")
-            
+                       
             # Then extract frames using OpenCV
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
@@ -550,7 +607,13 @@ class SilverFolderVideoLoader:
                 max_frames = min(frame_cap, total_frames - start_frame)
             else:
                 max_frames = total_frames - start_frame
-            
+
+            # Create lazy audio map
+            duration = max_frames / fps if max_frames > 0 else 0
+            print(f"[_extract_frames] Created LazyAudioMap with duration: {duration:.2f}s")
+            audio = LazyAudioMap(video_path, start_frame / fps if start_frame > 0 else 0, duration)
+            print(f"[_extract_frames] Audio object type: {type(audio)}")
+
             # Set start position
             if start_frame > 0:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -580,16 +643,16 @@ class SilverFolderVideoLoader:
             if not frames:
                 raise ValueError(f"No frames could be extracted from {video_path}")
                 
-            return torch.cat(frames, dim=0), fps, audio  # Return frames, fps, and audio
+            return torch.cat(frames, dim=0), fps, audio
             
         except Exception as e:
             print(f"[FolderVideoLoader] Error extracting frames from {video_path}: {e}")
             raise
 
     def load_videos_from_folder(self, folder_path: str, frame_cap: int = 0, frame_rate_force: float = 0.0, 
-                              start_frame: int = 0, batch_size: int = 1, current_index: int = 0, 
+                              start_frame: int = 0, current_index: int = 0, 
                               action: str = 'fixed', sort_by: str = 'name', sort_order: str = 'ascending'):
-        """Load video frames and audio from a specified folder with flexible index management."""
+        """Load video frames from a specified folder with flexible index management."""
         if not os.path.isdir(folder_path):
             raise ValueError(f"[FolderVideoLoader] Invalid folder path: {folder_path}")
 
@@ -601,23 +664,18 @@ class SilverFolderVideoLoader:
         # Ensure index is within bounds after sorting
         current_idx = max(0, min(current_index, len(video_files) - 1))
 
-        # Load video frames and audio
+        # Load video frames
         all_frames = []
-        all_audio = []
         filenames = []
         
-        for i in range(batch_size):
-            idx = (current_idx + i) % len(video_files)
-            video_path = os.path.join(folder_path, video_files[idx])
-            try:
-                frames, fps, audio = self._extract_frames(video_path, frame_cap, frame_rate_force, start_frame)
-                all_frames.append(frames)
-                if audio is not None:
-                    all_audio.append(audio)
-                filenames.append(video_path)
-            except Exception as e:
-                print(f"[FolderVideoLoader] Error processing video {video_path}: {e}")
-                continue
+        idx = (current_idx) % len(video_files)
+        video_path = os.path.join(folder_path, video_files[idx])
+        try:
+            frames, fps, audio = self._extract_frames(video_path, frame_cap, frame_rate_force, start_frame)
+            all_frames.append(frames)
+            filenames.append(video_path)
+        except Exception as e:
+            print(f"[FolderVideoLoader] Error processing video {video_path}: {e}")
 
         if not all_frames:
             raise ValueError("[FolderVideoLoader] No valid videos could be processed from the specified folder")
@@ -625,21 +683,6 @@ class SilverFolderVideoLoader:
         # Stack all frames from all videos
         images = torch.cat(all_frames, dim=0)
         
-        # Combine audio if available
-        combined_audio = None
-        if all_audio:
-            from moviepy.audio.AudioClip import concatenate_audioclips
-            try:
-                # Filter out None audio clips and ensure they have duration > 0
-                valid_audio_clips = [clip for clip in all_audio if clip is not None and clip.duration > 0]
-                if valid_audio_clips:
-                    if len(valid_audio_clips) == 1:
-                        combined_audio = valid_audio_clips[0].copy()
-                    else:
-                        combined_audio = concatenate_audioclips(valid_audio_clips)
-            except Exception as e:
-                print(f"[FolderVideoLoader] Error combining audio: {e}")
-                combined_audio = None
 
         # Update index based on action
         if action == "increment":
@@ -656,7 +699,7 @@ class SilverFolderVideoLoader:
 
         return {
             "ui": {"next_index": [next_index]}, 
-            "result": (images, ", ".join(filenames), next_index, fps, combined_audio)
+            "result": (images, ", ".join(filenames), next_index, fps, audio)
         }
 
 class SilverFolderFilePathLoader:
