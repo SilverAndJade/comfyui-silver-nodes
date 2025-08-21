@@ -401,10 +401,18 @@ class LazyAudioMap(Mapping):
         ENCODE_ARGS = ('utf-8', 'ignore')
         
         args = [self.ffmpeg_path, "-i", self.file]
+        
+        # Use higher precision for start time (supports milliseconds)
         if self.start_time > 0:
-            args += ["-ss", str(self.start_time)]
+            # Format as seconds with 3 decimal places (milliseconds precision)
+            start_time = f"{self.start_time:.3f}"
+            args += ["-ss", start_time]
+        
+        # Use higher precision for duration
         if self.duration > 0:
-            args += ["-t", str(self.duration)]
+            # Format as seconds with 3 decimal places (milliseconds precision)
+            duration = f"{self.duration:.3f}"
+            args += ["-t", duration]
             
         try:
             print(f"[LazyAudioMap] Extracting audio with ffmpeg: {' '.join(args)}")
@@ -441,8 +449,8 @@ class LazyAudioMap(Mapping):
             print(f"[LazyAudioMap] Error extracting audio: {e.stderr.decode(*ENCODE_ARGS)}")
             return {'waveform': None, 'sample_rate': 44100}
         except Exception as e:
-            print(f"[LazyAudioMap] Unexpected error: {str(e)}")
-            return {'waveform': None, 'sample_rate': 44100}
+        print(f"[LazyAudioMap] Unexpected error: {str(e)}")
+        return {'waveform': None, 'sample_rate': 44100}
     
     def __getitem__(self, key):
         if self._dict is None:
