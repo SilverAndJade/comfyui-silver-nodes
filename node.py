@@ -449,7 +449,7 @@ class LazyAudioMap(Mapping):
             print(f"[LazyAudioMap] Error extracting audio: {e.stderr.decode(*ENCODE_ARGS)}")
             return {'waveform': None, 'sample_rate': 44100}
         except Exception as e:
-        print(f"[LazyAudioMap] Unexpected error: {str(e)}")
+            print(f"[LazyAudioMap] Unexpected error: {str(e)}")
         return {'waveform': None, 'sample_rate': 44100}
     
     def __getitem__(self, key):
@@ -1855,9 +1855,21 @@ class SilverStringReplacer:
         # Create a mapping of search terms to their possible replacements
         replacement_map = {}
         for line in replacement_pattern.split('\n'):
-            parts = [p.strip() for p in line.split(':') if p.strip()]
-            if len(parts) >= 2:
-                replacement_map[parts[0]] = parts[1:]
+            if not line.strip():
+                continue
+                
+            # Split the line by colons
+            parts = line.split(':')
+            if len(parts) < 2:  # Skip lines without at least one colon
+                continue
+                
+            # First part is the search term (keep all spaces as-is)
+            search_term = parts[0]
+            # All remaining parts are possible replacements (keep all spaces as-is)
+            replacements = [part for part in parts[1:] if part]
+            
+            if search_term and replacements:  # Only add if we have both search term and at least one replacement
+                replacement_map[search_term] = replacements
         
         if not replacement_map:
             return (text,)
