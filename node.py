@@ -68,7 +68,7 @@ class SilverLoraModelLoader:
                 "action": (["fixed", "increment", "decrement", "randomize"], {"default": "increment"}),
                 "repeat_count": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1}),
                 "current_repeat": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1}),
-                "fetch_lora_info": ("BOOLEAN", {"default": False}),
+                "fetch_lora_info": ("BOOLEAN", {"default": True}),
             }
         }
     
@@ -1834,6 +1834,168 @@ class SilverUrlImageLoader:
             f"Skipping workflow: Failed to load image from URL after {max_retries} attempts"
         )
 
+class SilverCivitAILoader:
+    """
+    A ComfyUI node that fetches a random image from CivitAI's public API.
+    """
+    
+    def __init__(self):
+        self.history_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'history')
+        os.makedirs(self.history_dir, exist_ok=True)
+        self.history_file = os.path.join(self.history_dir, 'civitai_history.txt')
+        self.loaded_hashes = set()
+        self._load_history()
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "nsfw": (["none", "soft", "mature", "x"], {"default": "none"}),
+                "limit": ("INT", {"default": 100, "min": 1, "max": 1000}),
+                "download": (["disable", "enable"], {"default": "disable"}),
+            },
+            "optional": {
+                "force_refresh": (["disable", "enable"], {"default": "disable"}),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("image", "image_url", "prompt")
+    FUNCTION = "fetch_image"
+    CATEGORY = "image/loading"
+    
+    def _load_history(self):
+        """Load the history of loaded image hashes from file."""
+        if os.path.exists(self.history_file):
+            with open(self.history_file, 'r') as f:
+                self.loaded_hashes = set(line.strip() for line in f if line.strip())
+    
+    def _save_to_history(self, content_hash):
+        """Save a content hash to the history file with rolling history (max 1000 entries)."""
+        # Keep only the most recent 1000 entries to prevent the file from growing too large
+        history = list(self.loaded_hashes)
+        history = history[-999:]  # Keep only the most recent 999 entries
+        
+        with open(self.history_file, 'w') as f:
+            for h in history:
+                f.write(f"{h}\n")
+    
+    def _get_random_image(self, limit=100, nsfw=None, max_retries=3):
+        """Fetch a random image from CivitAI's API with retry logic."""
+        base_url = "https://civitai.com/api/v1/images"
+        params = {
+            'limit': min(limit, 100),  # Max 100 items per page
+            'nsfw': nsfw if nsfw != 'none' else None
+        }
+        
+        for attempt in range(max_retries):
+            try:
+                # Get the first page to understand pagination
+                response = requests.get(base_url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Get total number of items and pages
+                total_items = data.get('metadata', {}).get('totalItems', 0)
+                if not total_items:
+                    # If we can't get total items, use the items from the first page
+                    items = data.get('items', [])
+                    if not items:
+                        continue
+                    return random.choice(items)
+                
+                # Calculate total pages
+                page_size = data.get('metadata', {}).get('pageSize', 100)
+                total_pages = (total_items + page_size - 1) // page_size
+                
+                # Get a random page
+                random_page = random.randint(1, min(total_pages, 100))  # Limit to first 100 pages
+                params['page'] = random_page
+                
+                # Get the random page
+                response = requests.get(base_url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Select a random image from the page
+                items = data.get('items', [])
+                if not items:
+                    continue
+                
+                return random.choice(items)
+                
+            except Exception as e:
+                print(f"Attempt {attempt + 1} failed: {str(e)}")
+                if attempt == max_retries - 1:
+                    raise Exception(f"Failed to fetch image from CivitAI after {max_retries} attempts: {str(e)}")
+                time.sleep(1)  # Wait a bit before retrying
+    
+    def _download_image(self, url):
+        """Download an image from a URL and return it as a PIL Image."""
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        return Image.open(io.BytesIO(response.content)).convert("RGB")
+    
+    def _process_image(self, img):
+        """Process a PIL image into the format expected by ComfyUI."""
+        img = ImageOps.exif_transpose(img)
+        image = np.array(img).astype(np.float32) / 255.0
+        return torch.from_numpy(image)[None,]
+    
+    def fetch_image(self, seed, nsfw, limit, download, force_refresh="disable"):
+        """
+        Fetch a random image from CivitAI with the given parameters.
+        
+        Args:
+            seed: Random seed for reproducibility (0 for random)
+            nsfw: NSFW filter level
+            limit: Maximum number of items to consider
+            download: Whether to download the image
+            force_refresh: Whether to force a refresh of the image
+            
+        Returns:
+            Tuple of (image_tensor, image_url, prompt)
+        """
+        if seed > 0:
+            random.seed(seed)
+        
+        # Get a random image from CivitAI
+        image_data = self._get_random_image(limit=limit, nsfw=nsfw)
+        
+        if not image_data:
+            raise Exception("No images found or failed to fetch image from CivitAI")
+        
+        # Get the image URL (use the largest available size)
+        image_url = image_data.get('url')
+        if not image_url:
+            raise Exception("No image URL found in the response")
+        
+        # Generate a unique hash for this image
+        content_hash = hashlib.md5(image_url.encode('utf-8')).hexdigest()
+        
+        # Check if we've already loaded this image
+        if content_hash in self.loaded_hashes and force_refresh == "disable":
+            raise Exception(f"Image with hash {content_hash} has already been loaded. Enable 'force_refresh' to load it again.")
+        
+        # Download and process the image
+        try:
+            img = self._download_image(image_url)
+            image_tensor = self._process_image(img)
+            
+            # Add to history
+            self.loaded_hashes.add(content_hash)
+            self._save_to_history(content_hash)
+            
+            # Get the prompt if available
+            meta = image_data.get('meta', {})
+            prompt = meta.get('prompt', '')
+            
+            return (image_tensor, image_url, prompt)
+            
+        except Exception as e:
+            raise Exception(f"Failed to process image: {str(e)}")
+
 class SilverStringReplacer:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1904,6 +2066,7 @@ NODE_CLASS_MAPPINGS = {
     "SilverWebImageLoader": SilverWebImageLoader,
     "SilverUrlImageLoader": SilverUrlImageLoader,
     "SilverRandomFromList": SilverRandomFromList,
+    "SilverCivitAILoader": SilverCivitAILoader,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1916,5 +2079,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SilverFlickrRandomImage": "Silver Flickr Random Image",
     "SilverWebImageLoader": "Silver Load Largest Web Image",
     "SilverUrlImageLoader": "Silver URL Image Loader",
-    "SilverRandomFromList": "Silver Random From List"
+    "SilverRandomFromList": "Silver Random From List",
+    "SilverCivitAILoader": "Silver CivitAI Random Image"
 }
