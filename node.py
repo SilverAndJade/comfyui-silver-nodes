@@ -1964,19 +1964,19 @@ class SilverCivitAILoader:
         image_data = self._get_random_image(limit=limit, nsfw=nsfw)
         
         if not image_data:
-            raise Exception("No images found or failed to fetch image from CivitAI")
+            raise comfy.model_management.InterruptProcessingException(f"ERROR: No images found or failed to fetch image from CivitAI")
         
         # Get the image URL (use the largest available size)
         image_url = image_data.get('url')
         if not image_url:
-            raise Exception("No image URL found in the response")
+            raise comfy.model_management.InterruptProcessingException(f"ERROR: No image URL found in the response")
         
         # Generate a unique hash for this image
         content_hash = hashlib.md5(image_url.encode('utf-8')).hexdigest()
         
         # Check if we've already loaded this image
         if content_hash in self.loaded_hashes and force_refresh == "disable":
-            raise Exception(f"Image with hash {content_hash} has already been loaded. Enable 'force_refresh' to load it again.")
+            raise comfy.model_management.InterruptProcessingException(f"Image with hash {content_hash} has already been loaded. Enable 'force_refresh' to load it again.")
         
         # Download and process the image
         try:
@@ -1987,14 +1987,22 @@ class SilverCivitAILoader:
             self.loaded_hashes.add(content_hash)
             self._save_to_history(content_hash)
             
-            # Get the prompt if available
-            meta = image_data.get('meta', {})
-            prompt = meta.get('prompt', '')
+            # Get the prompt if available, with proper error handling
+            prompt = ''
+            try:
+                meta = image_data.get('meta')
+                if meta and isinstance(meta, dict):
+                    prompt = meta.get('prompt', '')
+            except Exception as meta_error:
+                print(f"Warning: Could not extract prompt: {str(meta_error)}")
+                raise comfy.model_management.InterruptProcessingException(error_msg)
             
             return (image_tensor, image_url, prompt)
             
         except Exception as e:
-            raise Exception(f"Failed to process image: {str(e)}")
+            error_msg = f"Skipping workflow: Failed to load image from CivitAI: {str(e)}"
+            print(error_msg)
+            raise comfy.model_management.InterruptProcessingException(error_msg)
 
 class SilverStringReplacer:
     @classmethod
