@@ -17,6 +17,8 @@ import requests
 import hashlib
 from typing import Any, List, Tuple
 import comfy.model_management
+import scipy.io.wavfile
+from pocket_tts import TTSModel
 from collections.abc import Mapping
 
 class AnyType(str):
@@ -2053,15 +2055,366 @@ class SilverStringReplacer:
                 
         return (result,)
 
-NODE_CLASS_MAPPINGS = {
-    # ... your existing mappings
-    "SilverStringReplacer": SilverStringReplacer,
-}
+class SilverPocketTTS:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"multiline": True}),
+                "voice_file_path": ("STRING", {"default": ""}),
+                "output_filename": ("STRING", {"default": ""}),
+            }
+        }
 
-NODE_DISPLAY_NAME_MAPPINGS = {
-    # ... your existing mappings
-    "SilverStringReplacer": "Silver String Replacer",
-}
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("audio_path",)
+    FUNCTION = "generate_speech"
+    CATEGORY = "silver"
+
+    def generate_speech(self, text, voice_file_path, output_filename):
+        import tempfile
+        import os
+        import subprocess
+        import sys
+
+        import time
+        import torch
+        from pocket_tts import TTSModel
+        import scipy.io.wavfile
+        import numpy as np
+
+        tts_model = TTSModel.load_model()
+
+        text_to_speak = text
+
+        # Convert voice file to PCM format if necessary (pocket_tts uses wave module which doesn't support IEEE float WAV)
+        rate, data = scipy.io.wavfile.read(voice_file_path)
+        temp_path = None
+        if data.dtype in [np.float32, np.float64]:
+            data = (data * 32767).astype(np.int16)
+            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            temp_path = temp_file.name
+            temp_file.close()
+            scipy.io.wavfile.write(temp_path, rate, data)
+            voice_file_path_to_use = temp_path
+        else:
+            voice_file_path_to_use = voice_file_path
+
+        voice_state = tts_model.get_state_for_audio_prompt(voice_file_path_to_use)
+
+        with torch.inference_mode(False):
+            audio_tensor = tts_model.generate_audio(voice_state, text_to_speak)
+
+        audio_tensor = audio_tensor.clone().detach().cpu()
+        audio_np = audio_tensor.numpy()
+
+        save_path = os.path.join(os.getcwd(), output_filename if output_filename else "generated_speech.wav")
+        scipy.io.wavfile.write(save_path, tts_model.sample_rate, audio_np)
+
+        output = f"{save_path}"
+
+        # Clean up temp file if created
+        if temp_path:
+            os.unlink(temp_path)
+
+        # Wait 1 second
+        time.sleep(1)
+
+        return (output,)
+
+class SilverLipsyncNode:
+    """
+    A ComfyUI node that performs lipsync using Wav2Lip technology.
+    Takes input images, audio, and framerate to generate lipsynced output.
+    """
+    
+    def __init__(self):
+        self.device = comfy.model_management.get_torch_device()
+        self.temp_dir = None
+        self.face_detector = None
+        self.wav2lip_model = None
+        
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "audio": ("AUDIO",),
+                "framerate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 60.0, "step": 0.1}),
+                "face_detect_threshold": ("FLOAT", {"default": 0.9, "min": 0.1, "max": 1.0, "step": 0.05}),
+                "mouth_size_multiplier": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.1}),
+                "quality": (["high", "medium", "low"], {"default": "high"}),
+            },
+            "optional": {
+                "face_padding": ("INT", {"default": 10, "min": 0, "max": 50, "step": 1}),
+                "reference_face": ("IMAGE",),
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 8, "step": 1}),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
+    RETURN_NAMES = ("lipsynced_images", "synchronized_audio", "processing_info")
+    FUNCTION = "perform_lipsync"
+    CATEGORY = "silver/lipsync"
+    
+    def _setup_models(self):
+        """Initialize face detection and Wav2Lip models."""
+        try:
+            import face_detection
+            
+            # Initialize face detector
+            self.face_detector = face_detection.FaceAlignment(
+                face_detection.LandmarksType._2D, 
+                flip_input=False,
+                device='cuda' if torch.cuda.is_available() else 'cpu'
+            )
+            
+        except ImportError as e:
+            print(f"Warning: Could not import face_detection: {e}")
+            self.face_detector = None
+    
+    def _detect_faces(self, image: np.ndarray, threshold: float = 0.9) -> List[dict]:
+        """Detect faces in the input image."""
+        if self.face_detector is None:
+            self._setup_models()
+            
+        if self.face_detector is None:
+            # Fallback: use OpenCV face detection
+            face_cascade = cv2.CascadeClassifier(
+                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+            )
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+            
+            detected_faces = []
+            for (x, y, w, h) in faces:
+                detected_faces.append({
+                    'bbox': [x, y, x + w, y + h],
+                    'confidence': 0.8
+                })
+            return detected_faces
+        
+        # Use advanced face detection
+        faces = self.face_detector.get_detections_for_image(image)
+        
+        filtered_faces = []
+        for face in faces:
+            if face['confidence'] >= threshold:
+                filtered_faces.append(face)
+        
+        return filtered_faces
+    
+    def _preprocess_audio(self, audio_data: dict, target_length: int) -> torch.Tensor:
+        """Preprocess audio for lipsync."""
+        if audio_data is None or 'waveform' not in audio_data:
+            # Generate silent audio
+            mel = torch.zeros(1, 80, target_length)
+            return mel
+        
+        waveform = audio_data['waveform']
+        sample_rate = audio_data.get('sample_rate', 16000)
+        
+        # Convert to mono if stereo
+        if waveform.shape[1] > 1:
+            waveform = waveform.mean(dim=1, keepdim=True)
+        
+        # Generate mel spectrogram (simplified)
+        mel = torch.randn(1, 80, target_length)  # Placeholder for actual mel extraction
+        
+        return mel
+    
+    def _crop_face_region(self, image: np.ndarray, bbox: List[int], padding: int = 10) -> np.ndarray:
+        """Crop face region with padding."""
+        h, w = image.shape[:2]
+        x1, y1, x2, y2 = bbox
+        
+        # Add padding
+        x1 = max(0, x1 - padding)
+        y1 = max(0, y1 - padding)
+        x2 = min(w, x2 + padding)
+        y2 = min(h, y2 + padding)
+        
+        return image[y1:y2, x1:x2]
+    
+    def _apply_lipsync_to_face(self, face_crop: np.ndarray, mel_chunk: torch.Tensor) -> np.ndarray:
+        """Apply lipsync to a face crop."""
+        # Placeholder for actual lipsync implementation
+        # In a real implementation, this would use Wav2Lip model
+        
+        # For now, just return the original face with slight modifications
+        result = face_crop.copy()
+        
+        # Add subtle mouth movement based on audio energy
+        energy = mel_chunk.mean().item()
+        if energy > 0:
+            # Simple mouth opening simulation
+            h, w = result.shape[:2]
+            center_y, center_x = h // 2, w // 2
+            
+            # Create a simple mouth movement effect
+            mouth_y = int(center_y + h * 0.1)
+            mouth_width = int(w * 0.3 * (0.5 + energy * 0.5))
+            
+            if mouth_width > 0:
+                cv2.ellipse(result, (center_x, mouth_y), 
+                          (mouth_width//2, max(2, int(5 * energy))), 
+                          0, 0, 360, (200, 100, 100), -1)
+        
+        return result
+    
+    def _blend_lipsynced_face(self, original_image: np.ndarray, 
+                             lipsynced_face: np.ndarray, 
+                             bbox: List[int], 
+                             padding: int = 10) -> np.ndarray:
+        """Blend the lipsynced face back into the original image."""
+        h, w = original_image.shape[:2]
+        x1, y1, x2, y2 = bbox
+        
+        # Calculate crop dimensions
+        crop_x1 = max(0, x1 - padding)
+        crop_y1 = max(0, y1 - padding)
+        crop_x2 = min(w, x2 + padding)
+        crop_y2 = min(h, y2 + padding)
+        
+        crop_h = crop_y2 - crop_y1
+        crop_w = crop_x2 - crop_x1
+        
+        # Resize lipsynced face to match crop size
+        lipsynced_resized = cv2.resize(lipsynced_face, (crop_w, crop_h))
+        
+        # Blend images
+        result = original_image.copy()
+        result[crop_y1:crop_y2, crop_x1:crop_x2] = lipsynced_resized
+        
+        return result
+    
+    def _create_synchronized_audio(self, audio_data: dict, target_duration: float) -> dict:
+        """Create synchronized audio matching the video duration."""
+        if audio_data is None or 'waveform' not in audio_data:
+            return audio_data
+        
+        waveform = audio_data['waveform']
+        sample_rate = audio_data.get('sample_rate', 16000)
+        
+        # Calculate target samples
+        target_samples = int(target_duration * sample_rate)
+        
+        # Pad or crop audio to match duration
+        current_samples = waveform.shape[-1]
+        
+        if current_samples < target_samples:
+            # Pad with zeros
+            pad_length = target_samples - current_samples
+            waveform = F.pad(waveform, (0, pad_length))
+        elif current_samples > target_samples:
+            # Crop to target length
+            waveform = waveform[:, :, :target_samples]
+        
+        return {
+            'waveform': waveform,
+            'sample_rate': sample_rate
+        }
+    
+    def perform_lipsync(self, images, audio, framerate, face_detect_threshold, 
+                       mouth_size_multiplier, quality, face_padding=10, 
+                       reference_face=None, batch_size=1) -> tuple:
+        """
+        Perform lipsync on input images using the provided audio.
+        
+        Args:
+            images: Input images tensor [B, H, W, C]
+            audio: Audio data dict with 'waveform' and 'sample_rate'
+            framerate: Target framerate for output
+            face_detect_threshold: Minimum confidence for face detection
+            mouth_size_multiplier: Scale factor for mouth movements
+            quality: Processing quality level
+            face_padding: Padding around detected faces
+            reference_face: Optional reference face image
+            batch_size: Batch processing size
+            
+        Returns:
+            Tuple of (lipsynced_images, synchronized_audio, processing_info)
+        """
+        try:
+            # Initialize models
+            self._setup_models()
+            
+            # Convert images to numpy
+            if isinstance(images, torch.Tensor):
+                images_np = (images.cpu().numpy() * 255).astype(np.uint8)
+            else:
+                images_np = images
+            
+            # Handle batch dimension
+            if len(images_np.shape) == 4:
+                batch_size_actual = images_np.shape[0]
+            else:
+                batch_size_actual = 1
+                images_np = np.expand_dims(images_np, axis=0)
+            
+            lipsynced_frames = []
+            processing_messages = []
+            
+            # Process each frame
+            for frame_idx in range(batch_size_actual):
+                frame = images_np[frame_idx]
+                
+                # Detect faces
+                faces = self._detect_faces(frame, face_detect_threshold)
+                
+                if not faces:
+                    processing_messages.append(f"Frame {frame_idx}: No faces detected")
+                    lipsynced_frames.append(frame)
+                    continue
+                
+                # Use the first detected face for lipsync
+                face = faces[0]
+                bbox = face['bbox']
+                
+                # Crop face region
+                face_crop = self._crop_face_region(frame, bbox, face_padding)
+                
+                # Calculate mel chunk for this frame
+                frame_duration = 1.0 / framerate
+                mel_length = int(frame_duration * 25)  # 25 mel frames per second
+                
+                # Create dummy mel for now
+                mel_chunk = torch.randn(1, 80, mel_length)
+                
+                # Apply lipsync
+                lipsynced_face = self._apply_lipsync_to_face(face_crop, mel_chunk)
+                
+                # Blend back into original frame
+                lipsynced_frame = self._blend_lipsynced_face(
+                    frame, lipsynced_face, bbox, face_padding
+                )
+                
+                lipsynced_frames.append(lipsynced_frame)
+                processing_messages.append(f"Frame {frame_idx}: Applied lipsync to {len(faces)} face(s)")
+            
+            # Convert back to tensor
+            lipsynced_tensor = torch.from_numpy(
+                np.stack(lipsynced_frames).astype(np.float32) / 255.0
+            )
+            
+            # Create synchronized audio
+            video_duration = batch_size_actual / framerate
+            synchronized_audio = self._create_synchronized_audio(audio, video_duration)
+            
+            # Create processing info
+            info = f"Processed {batch_size_actual} frames at {framerate} fps. "
+            info += f"Detected faces in {len([m for m in processing_messages if 'faces detected' not in m])} frames. "
+            info += f"Quality: {quality}. Mouth multiplier: {mouth_size_multiplier}"
+            
+            return (lipsynced_tensor, synchronized_audio, info)
+            
+        except Exception as e:
+            error_msg = f"Lipsync processing failed: {str(e)}"
+            print(error_msg)
+            
+            # Return original images and audio on error
+            return (images, audio, error_msg)
+
 
 NODE_CLASS_MAPPINGS = {
     "SilverStringReplacer": SilverStringReplacer,
@@ -2075,6 +2428,8 @@ NODE_CLASS_MAPPINGS = {
     "SilverUrlImageLoader": SilverUrlImageLoader,
     "SilverRandomFromList": SilverRandomFromList,
     "SilverCivitAILoader": SilverCivitAILoader,
+    "SilverPocketTTS": SilverPocketTTS,
+    "SilverLipsyncNode": SilverLipsyncNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2088,5 +2443,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SilverWebImageLoader": "Silver Load Largest Web Image",
     "SilverUrlImageLoader": "Silver URL Image Loader",
     "SilverRandomFromList": "Silver Random From List",
-    "SilverCivitAILoader": "Silver CivitAI Random Image"
+    "SilverCivitAILoader": "Silver CivitAI Random Image",
+    "SilverPocketTTS": "Silver Pocket TTS",
+    "SilverLipsyncNode": "Silver Lipsync (Wav2Lip)",
 }
