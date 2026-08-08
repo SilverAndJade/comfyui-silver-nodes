@@ -220,6 +220,24 @@ house:home:apartment:building
 4. Set action to "increment" to use a different prompt each run
 5. Connect the text output to your prompt input
 
+## Changelog
+
+### v1.1.0
+
+- **New Node**: `Silver API Text Loader` - Fetch text directly from an API URL with support for extracting nested JSON tags (e.g. `data.prompt`)
+- **New Node**: `Silver Stock Random Image` - Pull random stock images from Lorem Picsum, Wikimedia Commons, LoremFlickr, and Unsplash with no API keys required, including duplicate prevention via local history caching
+- **New Nodes**: Shared model loaders that keep weights cached across API prompts instead of re-reading from disk every run:
+  - `Silver Shared Diffusion Model` - cached UNet/Flux loader
+  - `Silver Shared Text Encoder` - cached CLIP/text-encoder loader
+  - `Silver Clear Model Cache` - clears all cached models to free RAM
+- **Improvements to Silver Web Image Loader**:
+  - Whole path-segment keyword exclusion (no more false positives from substring matches)
+  - Referer header for hotlink-protection bypass
+  - Exponential-backoff retries for connection issues
+  - WEBP and other transparency-heavy formats handled correctly via RGBA conversion
+- **Removed**: `Silver Lipsync (Wav2Lip)` placeholder node
+- Pinned `opencv-python` dependency for compatibility with ComfyUI's NumPy version
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

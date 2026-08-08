@@ -5,10 +5,14 @@ import re
 import random
 import time
 from datetime import datetime
+
+# Import the stock random image node
+from .silver_random_image_node import SilverStockRandomImage
 target_dir = sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 import folder_paths
 import torch
 import numpy as np
+import cv2
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from PIL import Image, ImageOps
@@ -1555,9 +1559,16 @@ class SilverWebImageLoader:
         if seed > 0:
             random.seed(seed)
         
-        # Get exclude keywords
+        # Get exclude keywords and compile regex pattern
         exclude_keywords = {kw.strip().lower() for kw in exclude.split(',') if kw.strip()}
         exclude_keywords.update({'sprite', 'thumbs'})
+        # Pre-compile pattern: match keyword surrounded by path delimiters or string boundaries
+        if exclude_keywords:
+            exclude_pattern = re.compile(
+                r'(?:^|[/._\-])(?:' + '|'.join(re.escape(kw) for kw in exclude_keywords) + r')(?:$|[/._\-])'
+            )
+        else:
+            exclude_pattern = None
         
         max_retries = 5
         last_error = None
@@ -1588,9 +1599,8 @@ class SilverWebImageLoader:
                     if not size_info or not size_info['url']:
                         continue
                         
-                    # Skip excluded URLs
-                    img_url_lower = size_info['url'].lower()
-                    if any(kw in img_url_lower for kw in exclude_keywords):
+                    # Skip excluded URLs (match whole path segments)
+                    if exclude_pattern and exclude_pattern.search(size_info['url'].lower()):
                         continue
                         
                     image_infos.append(size_info)
@@ -1605,8 +1615,21 @@ class SilverWebImageLoader:
                 for img_info in image_infos:
                     try:
                         img_url = img_info['url']
-                        img_response = session.get(img_url, headers=headers, timeout=timeout)
-                        img_response.raise_for_status()
+                        # Add Referer header for hotlink protection bypass
+                        img_headers = headers.copy()
+                        img_headers['Referer'] = url
+                        
+                        # Retry with exponential backoff for connection issues
+                        for img_attempt in range(3):
+                            try:
+                                img_response = session.get(img_url, headers=img_headers, timeout=timeout)
+                                img_response.raise_for_status()
+                                break
+                            except (requests.exceptions.ConnectionError, requests.exceptions.RemoteDisconnected) as ce:
+                                if img_attempt < 2:
+                                    time.sleep(2 ** img_attempt)  # 1s, 2s, 4s
+                                    continue
+                                raise
                         
                         # Verify it's actually an image
                         if not img_response.headers.get('content-type', '').startswith('image/'):
@@ -1623,8 +1646,14 @@ class SilverWebImageLoader:
                             
                         # Add to history before returning
                         self._save_to_history(content_hash)
-                            
-                        return Image.open(io.BytesIO(image_content)).convert("RGB")
+
+                        img = Image.open(io.BytesIO(image_content))
+                        # Handle WEBP and other modes with transparency by converting via RGBA
+                        if img.mode in ('RGBA', 'P', 'LA', 'L'):
+                            img = img.convert('RGBA').convert('RGB')
+                        else:
+                            img = img.convert('RGB')
+                        return img
                         
                     except Exception as e:
                         print(f"Failed to download {img_url}: {e}")
@@ -2006,6 +2035,76 @@ class SilverCivitAILoader:
             print(error_msg)
             raise comfy.model_management.InterruptProcessingException(error_msg)
 
+class SilverApiTextLoader:
+    """
+    A ComfyUI node that fetches text from an API URL.
+    Can return the entire response or a specific JSON tag.
+    """
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "", "multiline": False, "dynamicPrompts": False}),
+                "json_tag": ("STRING", {"default": "", "multiline": False, "dynamicPrompts": False}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    FUNCTION = "fetch_api_text"
+    CATEGORY = "silver_nodes/loaders"
+
+    def fetch_api_text(self, url, json_tag, seed):
+        if not url:
+            return ("",)
+
+        try:
+            headers = {
+                "User-Agent": "ComfyUI-SilverNodes/1.0"
+            }
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            # If no tag is specified, return the raw text
+            if not json_tag.strip():
+                return (response.text,)
+            
+            try:
+                data = response.json()
+                if isinstance(data, (dict, list)):
+                    # Support nested tags like "data.prompt" or array indices like "0.text"
+                    value = data
+                    for part in json_tag.split('.'):
+                        if isinstance(value, dict):
+                            value = value.get(part)
+                        elif isinstance(value, list):
+                            try:
+                                idx = int(part)
+                                value = value[idx]
+                            except (ValueError, IndexError):
+                                value = None
+                                break
+                        else:
+                            value = None
+                            break
+                    
+                    if value is not None:
+                        return (str(value),)
+                    else:
+                        print(f"[SilverApiTextLoader] Tag '{json_tag}' not found in JSON response")
+                        return (response.text,)
+                else:
+                    print(f"[SilverApiTextLoader] Response is not a JSON object/list")
+                    return (response.text,)
+            except ValueError:
+                # Not JSON, but a tag was requested
+                print(f"[SilverApiTextLoader] Response is not valid JSON, but tag '{json_tag}' was requested")
+                return (response.text,)
+
+        except Exception as e:
+            print(f"[SilverApiTextLoader] Error fetching from {url}: {e}")
+            return (f"Error: {str(e)}",)
+
 class SilverStringReplacer:
     @classmethod
     def INPUT_TYPES(cls):
@@ -2122,300 +2221,6 @@ class SilverPocketTTS:
 
         return (output,)
 
-class SilverLipsyncNode:
-    """
-    A ComfyUI node that performs lipsync using Wav2Lip technology.
-    Takes input images, audio, and framerate to generate lipsynced output.
-    """
-    
-    def __init__(self):
-        self.device = comfy.model_management.get_torch_device()
-        self.temp_dir = None
-        self.face_detector = None
-        self.wav2lip_model = None
-        
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "images": ("IMAGE",),
-                "audio": ("AUDIO",),
-                "framerate": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 60.0, "step": 0.1}),
-                "face_detect_threshold": ("FLOAT", {"default": 0.9, "min": 0.1, "max": 1.0, "step": 0.05}),
-                "mouth_size_multiplier": ("FLOAT", {"default": 1.0, "min": 0.5, "max": 2.0, "step": 0.1}),
-                "quality": (["high", "medium", "low"], {"default": "high"}),
-            },
-            "optional": {
-                "face_padding": ("INT", {"default": 10, "min": 0, "max": 50, "step": 1}),
-                "reference_face": ("IMAGE",),
-                "batch_size": ("INT", {"default": 1, "min": 1, "max": 8, "step": 1}),
-            }
-        }
-    
-    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
-    RETURN_NAMES = ("lipsynced_images", "synchronized_audio", "processing_info")
-    FUNCTION = "perform_lipsync"
-    CATEGORY = "silver/lipsync"
-    
-    def _setup_models(self):
-        """Initialize face detection and Wav2Lip models."""
-        try:
-            import face_detection
-            
-            # Initialize face detector
-            self.face_detector = face_detection.FaceAlignment(
-                face_detection.LandmarksType._2D, 
-                flip_input=False,
-                device='cuda' if torch.cuda.is_available() else 'cpu'
-            )
-            
-        except ImportError as e:
-            print(f"Warning: Could not import face_detection: {e}")
-            self.face_detector = None
-    
-    def _detect_faces(self, image: np.ndarray, threshold: float = 0.9) -> List[dict]:
-        """Detect faces in the input image."""
-        if self.face_detector is None:
-            self._setup_models()
-            
-        if self.face_detector is None:
-            # Fallback: use OpenCV face detection
-            face_cascade = cv2.CascadeClassifier(
-                cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-            )
-            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-            
-            detected_faces = []
-            for (x, y, w, h) in faces:
-                detected_faces.append({
-                    'bbox': [x, y, x + w, y + h],
-                    'confidence': 0.8
-                })
-            return detected_faces
-        
-        # Use advanced face detection
-        faces = self.face_detector.get_detections_for_image(image)
-        
-        filtered_faces = []
-        for face in faces:
-            if face['confidence'] >= threshold:
-                filtered_faces.append(face)
-        
-        return filtered_faces
-    
-    def _preprocess_audio(self, audio_data: dict, target_length: int) -> torch.Tensor:
-        """Preprocess audio for lipsync."""
-        if audio_data is None or 'waveform' not in audio_data:
-            # Generate silent audio
-            mel = torch.zeros(1, 80, target_length)
-            return mel
-        
-        waveform = audio_data['waveform']
-        sample_rate = audio_data.get('sample_rate', 16000)
-        
-        # Convert to mono if stereo
-        if waveform.shape[1] > 1:
-            waveform = waveform.mean(dim=1, keepdim=True)
-        
-        # Generate mel spectrogram (simplified)
-        mel = torch.randn(1, 80, target_length)  # Placeholder for actual mel extraction
-        
-        return mel
-    
-    def _crop_face_region(self, image: np.ndarray, bbox: List[int], padding: int = 10) -> np.ndarray:
-        """Crop face region with padding."""
-        h, w = image.shape[:2]
-        x1, y1, x2, y2 = bbox
-        
-        # Add padding
-        x1 = max(0, x1 - padding)
-        y1 = max(0, y1 - padding)
-        x2 = min(w, x2 + padding)
-        y2 = min(h, y2 + padding)
-        
-        return image[y1:y2, x1:x2]
-    
-    def _apply_lipsync_to_face(self, face_crop: np.ndarray, mel_chunk: torch.Tensor) -> np.ndarray:
-        """Apply lipsync to a face crop."""
-        # Placeholder for actual lipsync implementation
-        # In a real implementation, this would use Wav2Lip model
-        
-        # For now, just return the original face with slight modifications
-        result = face_crop.copy()
-        
-        # Add subtle mouth movement based on audio energy
-        energy = mel_chunk.mean().item()
-        if energy > 0:
-            # Simple mouth opening simulation
-            h, w = result.shape[:2]
-            center_y, center_x = h // 2, w // 2
-            
-            # Create a simple mouth movement effect
-            mouth_y = int(center_y + h * 0.1)
-            mouth_width = int(w * 0.3 * (0.5 + energy * 0.5))
-            
-            if mouth_width > 0:
-                cv2.ellipse(result, (center_x, mouth_y), 
-                          (mouth_width//2, max(2, int(5 * energy))), 
-                          0, 0, 360, (200, 100, 100), -1)
-        
-        return result
-    
-    def _blend_lipsynced_face(self, original_image: np.ndarray, 
-                             lipsynced_face: np.ndarray, 
-                             bbox: List[int], 
-                             padding: int = 10) -> np.ndarray:
-        """Blend the lipsynced face back into the original image."""
-        h, w = original_image.shape[:2]
-        x1, y1, x2, y2 = bbox
-        
-        # Calculate crop dimensions
-        crop_x1 = max(0, x1 - padding)
-        crop_y1 = max(0, y1 - padding)
-        crop_x2 = min(w, x2 + padding)
-        crop_y2 = min(h, y2 + padding)
-        
-        crop_h = crop_y2 - crop_y1
-        crop_w = crop_x2 - crop_x1
-        
-        # Resize lipsynced face to match crop size
-        lipsynced_resized = cv2.resize(lipsynced_face, (crop_w, crop_h))
-        
-        # Blend images
-        result = original_image.copy()
-        result[crop_y1:crop_y2, crop_x1:crop_x2] = lipsynced_resized
-        
-        return result
-    
-    def _create_synchronized_audio(self, audio_data: dict, target_duration: float) -> dict:
-        """Create synchronized audio matching the video duration."""
-        if audio_data is None or 'waveform' not in audio_data:
-            return audio_data
-        
-        waveform = audio_data['waveform']
-        sample_rate = audio_data.get('sample_rate', 16000)
-        
-        # Calculate target samples
-        target_samples = int(target_duration * sample_rate)
-        
-        # Pad or crop audio to match duration
-        current_samples = waveform.shape[-1]
-        
-        if current_samples < target_samples:
-            # Pad with zeros
-            pad_length = target_samples - current_samples
-            waveform = F.pad(waveform, (0, pad_length))
-        elif current_samples > target_samples:
-            # Crop to target length
-            waveform = waveform[:, :, :target_samples]
-        
-        return {
-            'waveform': waveform,
-            'sample_rate': sample_rate
-        }
-    
-    def perform_lipsync(self, images, audio, framerate, face_detect_threshold, 
-                       mouth_size_multiplier, quality, face_padding=10, 
-                       reference_face=None, batch_size=1) -> tuple:
-        """
-        Perform lipsync on input images using the provided audio.
-        
-        Args:
-            images: Input images tensor [B, H, W, C]
-            audio: Audio data dict with 'waveform' and 'sample_rate'
-            framerate: Target framerate for output
-            face_detect_threshold: Minimum confidence for face detection
-            mouth_size_multiplier: Scale factor for mouth movements
-            quality: Processing quality level
-            face_padding: Padding around detected faces
-            reference_face: Optional reference face image
-            batch_size: Batch processing size
-            
-        Returns:
-            Tuple of (lipsynced_images, synchronized_audio, processing_info)
-        """
-        try:
-            # Initialize models
-            self._setup_models()
-            
-            # Convert images to numpy
-            if isinstance(images, torch.Tensor):
-                images_np = (images.cpu().numpy() * 255).astype(np.uint8)
-            else:
-                images_np = images
-            
-            # Handle batch dimension
-            if len(images_np.shape) == 4:
-                batch_size_actual = images_np.shape[0]
-            else:
-                batch_size_actual = 1
-                images_np = np.expand_dims(images_np, axis=0)
-            
-            lipsynced_frames = []
-            processing_messages = []
-            
-            # Process each frame
-            for frame_idx in range(batch_size_actual):
-                frame = images_np[frame_idx]
-                
-                # Detect faces
-                faces = self._detect_faces(frame, face_detect_threshold)
-                
-                if not faces:
-                    processing_messages.append(f"Frame {frame_idx}: No faces detected")
-                    lipsynced_frames.append(frame)
-                    continue
-                
-                # Use the first detected face for lipsync
-                face = faces[0]
-                bbox = face['bbox']
-                
-                # Crop face region
-                face_crop = self._crop_face_region(frame, bbox, face_padding)
-                
-                # Calculate mel chunk for this frame
-                frame_duration = 1.0 / framerate
-                mel_length = int(frame_duration * 25)  # 25 mel frames per second
-                
-                # Create dummy mel for now
-                mel_chunk = torch.randn(1, 80, mel_length)
-                
-                # Apply lipsync
-                lipsynced_face = self._apply_lipsync_to_face(face_crop, mel_chunk)
-                
-                # Blend back into original frame
-                lipsynced_frame = self._blend_lipsynced_face(
-                    frame, lipsynced_face, bbox, face_padding
-                )
-                
-                lipsynced_frames.append(lipsynced_frame)
-                processing_messages.append(f"Frame {frame_idx}: Applied lipsync to {len(faces)} face(s)")
-            
-            # Convert back to tensor
-            lipsynced_tensor = torch.from_numpy(
-                np.stack(lipsynced_frames).astype(np.float32) / 255.0
-            )
-            
-            # Create synchronized audio
-            video_duration = batch_size_actual / framerate
-            synchronized_audio = self._create_synchronized_audio(audio, video_duration)
-            
-            # Create processing info
-            info = f"Processed {batch_size_actual} frames at {framerate} fps. "
-            info += f"Detected faces in {len([m for m in processing_messages if 'faces detected' not in m])} frames. "
-            info += f"Quality: {quality}. Mouth multiplier: {mouth_size_multiplier}"
-            
-            return (lipsynced_tensor, synchronized_audio, info)
-            
-        except Exception as e:
-            error_msg = f"Lipsync processing failed: {str(e)}"
-            print(error_msg)
-            
-            # Return original images and audio on error
-            return (images, audio, error_msg)
-
-
 NODE_CLASS_MAPPINGS = {
     "SilverStringReplacer": SilverStringReplacer,
     "SilverLoraModelLoader": SilverLoraModelLoader,
@@ -2428,8 +2233,9 @@ NODE_CLASS_MAPPINGS = {
     "SilverUrlImageLoader": SilverUrlImageLoader,
     "SilverRandomFromList": SilverRandomFromList,
     "SilverCivitAILoader": SilverCivitAILoader,
+    "SilverApiTextLoader": SilverApiTextLoader,
     "SilverPocketTTS": SilverPocketTTS,
-    "SilverLipsyncNode": SilverLipsyncNode,
+    "SilverStockRandomImage": SilverStockRandomImage
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2444,6 +2250,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SilverUrlImageLoader": "Silver URL Image Loader",
     "SilverRandomFromList": "Silver Random From List",
     "SilverCivitAILoader": "Silver CivitAI Random Image",
+    "SilverApiTextLoader": "Silver API Text Loader",
     "SilverPocketTTS": "Silver Pocket TTS",
-    "SilverLipsyncNode": "Silver Lipsync (Wav2Lip)",
+    "SilverStockRandomImage": "Silver Stock Random Image"
 }
