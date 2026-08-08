@@ -227,7 +227,7 @@ house:home:apartment:building
 - **New Node**: `Silver API Text Loader` - Fetch text directly from an API URL with support for extracting nested JSON tags (e.g. `data.prompt`)
 - **New Node**: `Silver Stock Random Image` - Pull random stock images from Lorem Picsum, Wikimedia Commons, LoremFlickr, and Unsplash with no API keys required, including duplicate prevention via local history caching
 - **New Nodes**: Shared model loaders that keep weights cached across API prompts instead of re-reading from disk every run:
-  - `Silver Shared Diffusion Model` - cached UNet/Flux loader
+  - `Silver Shared Diffusion Model` - cached UNet/Flux loader (adapted from [ComfyUI-Inspire-Pack](https://github.com/ltdrdata/ComfyUI-Inspire-Pack))
   - `Silver Shared Text Encoder` - cached CLIP/text-encoder loader
   - `Silver Clear Model Cache` - clears all cached models to free RAM
 - **Improvements to Silver Web Image Loader**:
@@ -237,6 +237,10 @@ house:home:apartment:building
   - WEBP and other transparency-heavy formats handled correctly via RGBA conversion
 - **Removed**: `Silver Lipsync (Wav2Lip)` placeholder node
 - Pinned `opencv-python` dependency for compatibility with ComfyUI's NumPy version
+
+## Credits
+
+- The shared model caching approach in the `Silver Shared Diffusion Model` node is adapted from [ComfyUI-Inspire-Pack](https://github.com/ltdrdata/ComfyUI-Inspire-Pack) by [ltdrdata](https://github.com/ltdrdata). Many thanks for the original work.
 
 ## Contributing
 
