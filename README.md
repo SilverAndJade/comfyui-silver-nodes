@@ -230,6 +230,7 @@ house:home:apartment:building
   - `Silver Shared Diffusion Model` - cached UNet/Flux loader (adapted from [ComfyUI-Inspire-Pack](https://github.com/ltdrdata/ComfyUI-Inspire-Pack))
   - `Silver Shared Text Encoder` - cached CLIP/text-encoder loader
   - `Silver Clear Model Cache` - clears all cached models to free RAM
+  - **Note**: These two cache loaders also require a companion patch to ComfyUI's `comfy/model_management.py` (adding a `model_key` to loaded model patchers so `LoadedModel.__eq__` can deduplicate separate patcher objects of the same weights). Without it, the same file loaded via different patchers is treated as two distinct models, causing doubled VRAM usage and spurious reloads that defeat the cache.
 - **Improvements to Silver Web Image Loader**:
   - Whole path-segment keyword exclusion (no more false positives from substring matches)
   - Referer header for hotlink-protection bypass
