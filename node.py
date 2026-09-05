@@ -21,6 +21,8 @@ import requests
 import hashlib
 from typing import Any, List, Tuple
 import comfy.model_management
+import comfy.sd
+import comfy.utils
 import scipy.io.wavfile
 from pocket_tts import TTSModel
 from collections.abc import Mapping
@@ -69,17 +71,21 @@ class SilverLoraModelLoader:
         cls.LORA_NAMES = folder_paths.get_filename_list("loras")
         return {
             "required": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
                 "regex_filter": ("STRING", {"default": ".*"}),
                 "lora_name": (cls.LORA_NAMES, ),
                 "action": (["fixed", "increment", "decrement", "randomize"], {"default": "increment"}),
                 "repeat_count": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1}),
                 "current_repeat": ("INT", {"default": 1, "min": 1, "max": 100, "step": 1}),
+                "strength_model": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
+                "strength_clip": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01}),
                 "fetch_lora_info": ("BOOLEAN", {"default": True}),
             }
         }
     
-    RETURN_TYPES = (any_return, "STRING", "STRING", any_return, any_return)
-    RETURN_NAMES = ("COMBO", "STRING", "lora_tags", "example_prompts", "example_images")
+    RETURN_TYPES = (any_return, "STRING", "STRING", any_return, any_return, "MODEL", "CLIP")
+    RETURN_NAMES = ("COMBO", "STRING", "lora_tags", "example_prompts", "example_images", "MODEL", "CLIP")
     FUNCTION = "load_lora_model"
     CATEGORY = "silver"
 
@@ -187,14 +193,14 @@ class SilverLoraModelLoader:
             print(f"Error getting Lora info: {str(e)}")
             return "", [""], [""]
 
-    def load_lora_model(self, regex_filter=".*", lora_name="None", action="fixed", repeat_count=1, current_repeat=0, fetch_lora_info=False):
+    def load_lora_model(self, model=None, clip=None, strength_model=1.0, strength_clip=1.0, regex_filter=".*", lora_name="None", action="fixed", repeat_count=1, current_repeat=0, fetch_lora_info=False):
         lora_names = self.LORA_NAMES
         current_model_index = next((i for i, name in enumerate(lora_names) if name == lora_name), 0)
         regex = re.compile(regex_filter, re.IGNORECASE)
         filtered_loras = [i for i, name in enumerate(lora_names) if regex.search(name)]
         if not filtered_loras:
             return {"ui": {"next_index": [current_model_index], "next_repeat": [current_repeat]},
-                    "result": (lora_name, lora_name)}
+                    "result": (lora_name, lora_name, "", [""], [""], model, clip)}
         try:
             filtered_idx_pos = filtered_loras.index(current_model_index)
         except ValueError:
@@ -221,9 +227,22 @@ class SilverLoraModelLoader:
         if fetch_lora_info:
             lora_tags, example_prompts, example_images = self.get_lora_info(next_model)
         
+        model_out = model
+        clip_out = clip
+        if strength_model != 0 or strength_clip != 0:
+            if model is not None or clip is not None:
+                lora_path = folder_paths.get_full_path("loras", next_model)
+                if lora_path is not None and os.path.exists(lora_path):
+                    try:
+                        lora_state_dict, lora_metadata = comfy.utils.load_torch_file(lora_path, safe_load=True, return_metadata=True)
+                        model_out, clip_out = comfy.sd.load_lora_for_models(model, clip, lora_state_dict, strength_model, strength_clip, lora_metadata=lora_metadata)
+                    except Exception as e:
+                        print(f"Error loading lora {next_model}: {str(e)}")
+                        model_out = model
+                        clip_out = clip
 
         return {"ui": {"next_model": [next_model], "next_repeat": [next_repeat]},
-                "result": (next_model, next_model, lora_tags, example_prompts, example_images)}
+                "result": (next_model, next_model, lora_tags, example_prompts, example_images, model_out, clip_out)}
 
 class SilverFolderImageLoader:
 
@@ -2112,6 +2131,8 @@ class SilverStringReplacer:
             "required": {
                 "text": ("STRING", {"forceInput": True}),
                 "replacement_pattern": ("STRING", {"multiline": True}),
+                "case_sensitive": ("BOOLEAN", {"default": False}),
+                "match_mode": (["whole_word", "content", "word_edge"],),
             }
         }
 
@@ -2119,7 +2140,7 @@ class SilverStringReplacer:
     FUNCTION = "replace_strings"
     CATEGORY = "silver_nodes/text"
 
-    def replace_strings(self, text, replacement_pattern):
+    def replace_strings(self, text, replacement_pattern, case_sensitive=False, match_mode="whole_word"):
         if not replacement_pattern.strip():
             return (text,)
             
@@ -2136,8 +2157,8 @@ class SilverStringReplacer:
                 
             # First part is the search term (keep all spaces as-is)
             search_term = parts[0]
-            # All remaining parts are possible replacements (keep all spaces as-is)
-            replacements = [part for part in parts[1:] if part]
+            # All remaining parts are possible replacements (keep empty strings for blank replacements)
+            replacements = parts[1:]
             
             if search_term and replacements:  # Only add if we have both search term and at least one replacement
                 replacement_map[search_term] = replacements
@@ -2146,11 +2167,16 @@ class SilverStringReplacer:
             return (text,)
             
         # Replace occurrences in the input text
+        flags = 0 if case_sensitive else re.IGNORECASE
         result = text
         for search_term, replacements in replacement_map.items():
-            if search_term in result:
-                replacement = random.choice(replacements)
-                result = result.replace(search_term, replacement)
+            replacement = random.choice(replacements)
+            pattern = re.escape(search_term)
+            if match_mode == "whole_word":
+                pattern = r'\b' + pattern + r'\b'
+            elif match_mode == "word_edge":
+                pattern = r'(?<!\w)' + pattern + r'|' + pattern + r'(?!\w)'
+            result = re.sub(pattern, replacement, result, flags=flags)
                 
         return (result,)
 
