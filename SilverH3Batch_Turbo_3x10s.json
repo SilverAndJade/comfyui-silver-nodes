@@ -1,0 +1,126 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Load H3 UNET (INT8)"
+    }
+  },
+  "2": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Load Video VAE"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "_meta": {
+      "title": "Load Audio VAE"
+    }
+  },
+  "4": {
+    "class_type": "H3ClipLoaderAny",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "mmproj_name": "(auto)"
+    },
+    "_meta": {
+      "title": "Load H3 CLIP (NVFP4)"
+    }
+  },
+  "5": {
+    "class_type": "PathchSageAttentionKJ",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "sage_attention": "auto",
+      "allow_compile": false
+    },
+    "_meta": {
+      "title": "SageAttention"
+    }
+  },
+  "6": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "lora_name": "MINIM/Turbo/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "Turbo LoRA (4-step)"
+    }
+  },
+  "10": {
+    "class_type": "SilverH3PromptsBuilder",
+    "inputs": {
+      "text": "Cinematic wide shot, an isolated lighthouse on a rocky headland at dusk, waves explode over black rocks, seagulls wheel through amber haze, 70mm film look, drifting low cloud.\nCinematic slow push-in to the lighthouse tower at golden hour, its lamp swings a beam through drifting sea spray, handheld 70mm camera, clouds lit from below, cold surf crashing.\nCinematic close shot at the base door of the lighthouse, a rusted iron door creaks open, warm lantern light spills over wet stone, spray hums in the breeze, 70mm film look.",
+      "index": 0,
+      "batch": 3
+    },
+    "_meta": {
+      "title": "Silver H3 Line Batch (3 clips -> 3 clips)"
+    }
+  },
+  "20": {
+    "class_type": "SilverH3Batch",
+    "inputs": {
+      "model": [
+        "6",
+        0
+      ],
+      "clip": [
+        "4",
+        0
+      ],
+      "video_vae": [
+        "2",
+        0
+      ],
+      "audio_vae": [
+        "3",
+        0
+      ],
+      "prompts": [
+        "10",
+        0
+      ],
+      "width": 640,
+      "height": 640,
+      "frames_per_shot": 243,
+      "seed": 42,
+      "steps": 8,
+      "sampler_name": "res_multistep",
+      "scheduler": "simple",
+      "combine_videos": false,
+      "seed_per_shot": true,
+      "filename_prefix": "SilverH3Batch_Turbo_3x10s",
+      "format": "mp4",
+      "frame_compression": 23.0,
+      "apply_diffaid": false,
+      "diffaid_strength": 0.2,
+      "double_pass": false,
+      "double_pass_denoise": 0.25,
+      "double_pass_steps": 8,
+      "upscale_factor": 1.0
+    },
+    "_meta": {
+      "title": "Silver H3 Batch (3x10s -> 30s total, independent clips)"
+    }
+  }
+}

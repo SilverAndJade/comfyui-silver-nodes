@@ -1,0 +1,774 @@
+{
+  "id": "00000000-0000-0000-0000-000000000000",
+  "revision": 0,
+  "last_node_id": 23,
+  "last_link_id": 18,
+  "nodes": [
+    {
+      "id": 2,
+      "type": "VAELoader",
+      "pos": [
+        102.62800180318435,
+        418.5352338660864
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            12
+          ]
+        }
+      ],
+      "title": "Load Video VAE",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfy-core",
+        "ver": "0.33.2",
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "minimax_h3_video_vae_fp16.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+      }
+    },
+    {
+      "id": 3,
+      "type": "VAELoader",
+      "pos": [
+        102.3291185897433,
+        526.6234455647324
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            13
+          ]
+        }
+      ],
+      "title": "Load Audio VAE",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfy-core",
+        "ver": "0.33.2",
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "minimax_h3_audio_vae_fp32.safetensors"
+      ],
+      "widgets_values_named": {
+        "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+      }
+    },
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [
+        101.79312383458857,
+        129.6413752330823
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            8
+          ]
+        }
+      ],
+      "title": "Load H3 UNET (INT8, ref2v fused)",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfy-core",
+        "ver": "0.33.2",
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors",
+        "default"
+      ],
+      "widgets_values_named": {
+        "unet_name": "minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    {
+      "id": 4,
+      "type": "H3ClipLoaderAny",
+      "pos": [
+        102.25103629017903,
+        262.1651512387501
+      ],
+      "size": [
+        352.3333343505859,
+        106
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            11
+          ]
+        }
+      ],
+      "title": "Load H3 CLIP (NVFP4)",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfyui-h3-multishot",
+        "ver": "9bce864b7df056a2822e4af593de17ef199ebcdc",
+        "Node name for S&R": "H3ClipLoaderAny"
+      },
+      "widgets_values": [
+        "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "minimax",
+        "(auto)"
+      ],
+      "widgets_values_named": {
+        "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "type": "minimax",
+        "mmproj_name": "(auto)"
+      }
+    },
+    {
+      "id": 21,
+      "type": "PrimitiveFloat",
+      "pos": [
+        105.4052836496926,
+        875.7496278134737
+      ],
+      "size": [
+        210,
+        58
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "FLOAT",
+          "type": "FLOAT",
+          "links": [
+            15
+          ]
+        }
+      ],
+      "title": "Seconds Per Shot",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.5.2",
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfy-core",
+        "ver": "0.33.0",
+        "Node name for S&R": "PrimitiveFloat"
+      },
+      "widgets_values": [
+        10
+      ],
+      "widgets_values_named": {
+        "value": 10
+      }
+    },
+    {
+      "id": 22,
+      "type": "ComfyMathExpression",
+      "pos": [
+        318.688096321074,
+        904.3698171944642
+      ],
+      "size": [
+        360,
+        170
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "label": "a",
+          "name": "values.a",
+          "type": "FLOAT,INT,BOOLEAN",
+          "link": 15
+        },
+        {
+          "label": "b",
+          "name": "values.b",
+          "shape": 7,
+          "type": "FLOAT,INT,BOOLEAN",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "FLOAT",
+          "type": "FLOAT",
+          "links": []
+        },
+        {
+          "name": "INT",
+          "type": "INT",
+          "links": [
+            16
+          ]
+        },
+        {
+          "name": "BOOL",
+          "type": "BOOLEAN",
+          "links": []
+        }
+      ],
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.5.2",
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfy-core",
+        "ver": "0.33.0",
+        "Node name for S&R": "ComfyMathExpression"
+      },
+      "widgets_values": [
+        "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17"
+      ],
+      "widgets_values_named": {
+        "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17"
+      }
+    },
+    {
+      "id": 5,
+      "type": "PathchSageAttentionKJ",
+      "pos": [
+        383.90051614281447,
+        128.8744818549105
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            9
+          ]
+        }
+      ],
+      "title": "SageAttention",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfyui-kjnodes",
+        "ver": "35e5956193769d18a13136cdedb73a36a05c73e6",
+        "Node name for S&R": "PathchSageAttentionKJ"
+      },
+      "widgets_values": [
+        "auto",
+        false
+      ],
+      "widgets_values_named": {
+        "sage_attention": "auto",
+        "allow_compile": false
+      }
+    },
+    {
+      "id": 6,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        663.8590645356552,
+        128.8744818549105
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            17
+          ]
+        }
+      ],
+      "title": "Turbo LoRA (ref2v 4-step)",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfy-core",
+        "ver": "0.33.2",
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "MINIM/Turbo/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        0.75
+      ],
+      "widgets_values_named": {
+        "lora_name": "MINIM/Turbo/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        "strength_model": 0.75
+      }
+    },
+    {
+      "id": 23,
+      "type": "SpectrumApplyMiniMaxH3",
+      "pos": [
+        942.6177939514798,
+        159.17976923945827
+      ],
+      "size": [
+        390.669921875,
+        634
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 17
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            18
+          ]
+        }
+      ],
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.5.2",
+          "input_ue_unconnectable": {}
+        },
+        "cnr_id": "comfyui-spectrum-minimax-h3",
+        "ver": "88af9b36370a0b46b8002ad5b072f9748ebac826",
+        "Node name for S&R": "SpectrumApplyMiniMaxH3"
+      },
+      "widgets_values": [
+        true,
+        0.5,
+        1,
+        0.1,
+        2,
+        0.25,
+        1,
+        1,
+        8,
+        false,
+        "system_ram",
+        true,
+        false,
+        false,
+        true,
+        0,
+        "system_ram",
+        "off",
+        0.65
+      ],
+      "widgets_values_named": {
+        "enabled": true,
+        "blend_weight": 0.5,
+        "degree": 1,
+        "ridge_lambda": 0.1,
+        "window_size": 2,
+        "flex_window": 0.25,
+        "warmup_steps": 1,
+        "tail_actual_steps": 1,
+        "max_history": 8,
+        "debug": false,
+        "history_storage": "system_ram",
+        "bootstrap_first_forecast": true,
+        "anchor_residual_feedback": false,
+        "selective_rollback_correction": false,
+        "offline_smoothing_replay": true,
+        "audio_blend_weight": 0,
+        "offline_archive_storage": "system_ram",
+        "model_aware_mode": "off",
+        "model_aware_risk_threshold": 0.65
+      }
+    },
+    {
+      "id": 20,
+      "type": "SilverH3StagedMultishot",
+      "pos": [
+        1173.423314526755,
+        130
+      ],
+      "size": [
+        568.4068629123748,
+        858.6232112060999
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 18
+        },
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 11
+        },
+        {
+          "name": "video_vae",
+          "type": "VAE",
+          "link": 12
+        },
+        {
+          "name": "audio_vae",
+          "type": "VAE",
+          "link": 13
+        },
+        {
+          "name": "prompts",
+          "type": "STRING_LIST",
+          "link": 14
+        },
+        {
+          "name": "start_image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "guide_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "char_refs_all",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "char_refs_index",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "char_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "ref2v",
+          "widget": {
+            "name": "ref2v"
+          },
+          "type": "BOOLEAN",
+          "link": null
+        },
+        {
+          "name": "frames_per_shot",
+          "type": "INT",
+          "widget": {
+            "name": "frames_per_shot"
+          },
+          "link": 16
+        }
+      ],
+      "outputs": [
+        {
+          "name": "master_audio",
+          "type": "AUDIO",
+          "links": null
+        },
+        {
+          "name": "saved_video",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "Silver H3 Staged",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {}
+        },
+        "aux_id": "SilverAndJade/comfyui-silver-nodes",
+        "ver": "fc087536f02fc4611de482bb3fc7c2f20ac12c81",
+        "Node name for S&R": "SilverH3StagedMultishot"
+      },
+      "widgets_values": [
+        "diegetic_sound: Physical, action-linked sounds happening directly inside the scene. overall_soundscape: background environment or atmospheric noise \non_diegetic_music: None. \nOverall: Cinematic film footage shot on 70mm, volumetric golden-hour dusk light, a lone lighthouse on a rocky North Atlantic coast, damp dark stone, restless blue swell, drifting low cloud.\nNo Dialog. No Speaking. Ambient Audio\n",
+        true,
+        640,
+        640,
+        243,
+        696472406145700,
+        "randomize",
+        8,
+        "res_multistep",
+        "simple",
+        15,
+        true,
+        true,
+        true,
+        "SilverH3Staged",
+        "mp4",
+        23,
+        false,
+        0.25,
+        8,
+        1.0
+      ],
+      "widgets_values_named": {
+        "overall_prompt": "diegetic_sound: Physical, action-linked sounds happening directly inside the scene. overall_soundscape: background environment or atmospheric noise \non_diegetic_music: None. \nOverall: Cinematic film footage shot on 70mm, volumetric golden-hour dusk light, a lone lighthouse on a rocky North Atlantic coast, damp dark stone, restless blue swell, drifting low cloud.\nNo Dialog. No Speaking. Ambient Audio\n",
+        "ref2v": true,
+        "width": 640,
+        "height": 640,
+        "frames_per_shot": 243,
+        "seed": 696472406145700,
+        "control_after_generate": "randomize",
+        "steps": 8,
+        "sampler_name": "res_multistep",
+        "scheduler": "simple",
+        "latent_handoff_taper": 15,
+        "audio_onset_guard": true,
+        "audio_lock": true,
+        "seed_per_shot": true,
+        "filename_prefix": "SilverH3Staged",
+        "format": "mp4",
+        "frame_compression": 23,
+        "double_pass": false,
+        "double_pass_denoise": 0.25,
+        "double_pass_steps": 8,
+        "upscale_factor": 1.0
+      }
+    },
+    {
+      "id": 10,
+      "type": "SilverH3PromptsBuilder",
+      "pos": [
+        102.64631644876728,
+        635.4029718370693
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "prompts",
+          "type": "STRING_LIST",
+          "links": [
+            14
+          ]
+        }
+      ],
+      "title": "Silver H3 Line Batch (3 shots -> 3 clips)",
+      "properties": {
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {}
+        },
+        "aux_id": "SilverAndJade/comfyui-silver-nodes",
+        "ver": "fc087536f02fc4611de482bb3fc7c2f20ac12c81",
+        "Node name for S&R": "SilverH3PromptsBuilder"
+      },
+      "widgets_values": [
+        "Extremely wide establishing shot, the lighthouse tower anchoring the frame on the headland, waves crashing over black rocks in the foreground, seagulls wheeling through the hazy amber sky, drifting low cloud.\nSlow push-in toward the tower, handheld camera, the beacon's first flash sweeping the foam, water spume drifting across the lens, gulls crying, the tide beating against the flanks.\nTracking to the base of the tower, a rusted iron door groaning open, warm lantern light spilling out over wet stone, the lamp beam rotating above, the surf settling to a low pulse.",
+        0,
+        3
+      ],
+      "widgets_values_named": {
+        "text": "Extremely wide establishing shot, the lighthouse tower anchoring the frame on the headland, waves crashing over black rocks in the foreground, seagulls wheeling through the hazy amber sky, drifting low cloud.\nSlow push-in toward the tower, handheld camera, the beacon's first flash sweeping the foam, water spume drifting across the lens, gulls crying, the tide beating against the flanks.\nTracking to the base of the tower, a rusted iron door groaning open, warm lantern light spilling out over wet stone, the lamp beam rotating above, the surf settling to a low pulse.",
+        "index": 0,
+        "batch": 3
+      }
+    }
+  ],
+  "links": [
+    [
+      8,
+      1,
+      0,
+      5,
+      0,
+      "MODEL"
+    ],
+    [
+      9,
+      5,
+      0,
+      6,
+      0,
+      "MODEL"
+    ],
+    [
+      11,
+      4,
+      0,
+      20,
+      1,
+      "CLIP"
+    ],
+    [
+      12,
+      2,
+      0,
+      20,
+      2,
+      "VAE"
+    ],
+    [
+      13,
+      3,
+      0,
+      20,
+      3,
+      "VAE"
+    ],
+    [
+      14,
+      10,
+      0,
+      20,
+      4,
+      "STRING_LIST"
+    ],
+    [
+      15,
+      21,
+      0,
+      22,
+      0,
+      "FLOAT"
+    ],
+    [
+      16,
+      22,
+      1,
+      20,
+      10,
+      "INT"
+    ],
+    [
+      17,
+      6,
+      0,
+      23,
+      0,
+      "MODEL"
+    ],
+    [
+      18,
+      23,
+      0,
+      20,
+      0,
+      "MODEL"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ue_links": [],
+    "links_added_by_ue": [],
+    "ds": {
+      "scale": 0.8077087988826853,
+      "offset": [
+        423.24910956202876,
+        191.3411308653745
+      ]
+    },
+    "frontendVersion": "1.49.6",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}

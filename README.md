@@ -118,11 +118,11 @@ Both nodes share the same staging backbone - text encoder, DiT and the video/aud
 |---|---|---|
 | Output | **ONE continuous long-form take** | **N independent clips** |
 | Prompts | N scenes of the same take | N unrelated videos |
-| Inter-shot continuity | join keyframes / latent handoff, memory bank, audio lock, onset guard | none - clips share nothing |
+| Inter-shot continuity | join keyframes / latent handoff, audio lock, onset guard | none - clips share nothing |
 | Re-rolling | whole chain (deterministic start-to-finish) | any single clip |
-| Generation time per entry | slightly higher - shots 2+ attend to memory-bank ref rows and handoff injection adds per-step ops | baseline |
+| Generation time per entry | slightly higher - handoff injection adds per-step ops | baseline |
 
-**Staged** chains its shots into a single video: each shot re-wakes inside the previous tail latent (`latent_handoff`, the default) or, when a `start_image` is provided, opens on the previous shot's *actual last frame* (native keyframe channel); prior shots ride along as memory-bank ref rows, the audio spine is locked across every join, and the seams are trimmed and crossfaded into one master. It is the "do it right" long-form tool - continuity is engineered in - at the price of coupled, slightly more expensive shots that cannot be re-rendered independently (a bad shot 3 means re-running the chain).
+**Staged** chains its shots into a single video: each shot re-wakes inside the previous tail latent (`latent_handoff`, the default) or, when a `start_image` is provided, opens on the previous shot's *actual last frame* (native keyframe channel); the audio spine is locked across every join, and the seams are trimmed and crossfaded into one master. It is the "do it right" long-form tool - continuity is engineered in - at the price of coupled, slightly more expensive shots that cannot be re-rendered independently (a bad shot 3 means re-running the chain).
 
 **Batch** renders N standalone videos from N independent prompts with the same one-load-each discipline, so a 12-clip batch costs **~2 model swaps instead of ~3 x 12**. It is the cheaper long-form approximation when roughly-stable identity is good enough: `combine_videos` stitches the clips frame-to-frame with the raw guide track laid over the whole master, but there is **no cross-shot conditioning**, so each join is a hard cut, not a transition. Any single clip can be re-rolled on its own without touching the others.
 
@@ -147,7 +147,7 @@ Strict swap accounting: **latent_handoff = exactly 2 swaps for the whole run** (
 How consecutive shots join. **The mode is implied by the inputs - the `continuity` widget is gone**:
 
 - **`first_frame`** - selected by PROVIDING `start_image`. Each shot opens on the previous shot's *actual last frame* through H3's native keyframe channel (the stock I2V path, chained). The model gets clean re-planning semantics: "here is a picture of frame 0." 1 duplicate frame trimmed per join. Requires decoding the tail of each finished shot (done as a 1-frame plain decode, hot, so the DiT stays resident).
-  - **Keyframe/ref interaction**: `model_base.py:2173` overwrites `cond_video_latents` with ref block latents, destroying keyframe conditioning when both are present. A shot that carries a keyframe carries NO character refs: `start_image` + char refs are mutually exclusive, and when both are given the REFS are dropped with a warning (start-image chaining wins), so the keyframe stays clean. The memory bank likewise never rides here - shots 2+ are ref-gated to keep the keyframe, and shot 1 has no prior shot to bank.
+  - **Keyframe/ref interaction**: `model_base.py:2173` overwrites `cond_video_latents` with ref block latents, destroying keyframe conditioning when both are present. A shot that carries a keyframe carries NO character refs: `start_image` + char refs are mutually exclusive, and when both are given the REFS are dropped with a warning (start-image chaining wins), so the keyframe stays clean.
 - **`latent_handoff`** (default when NO `start_image`) - zero decode: the previous shot's tail video rows / audio columns are locked into the next shot's trajectory at every sampling step (re-noised to the current sigma inside the packed stream). The new shot literally wakes up inside its own previous state - motion, exposure and speech carry. The replayed head (5+17x repeated rows) is regenerated and trimmed on join.
 
 Why there is no "first_frame without decoding": H3's video latent mixes ~3.4 frames into each latent row (5 frames across 2 bootstrap rows, then 17 frames per 5-row block), pooled causally - the final frame has no isolated latent representation. The keyframe slot also expects an *image-mode* latent positioned outside the target timeline, while tail rows are continuation state. Converting between those regimes requires pixels; latent_handoff simply skips the keyframe channel instead.
@@ -157,19 +157,7 @@ Why there is no "first_frame without decoding": H3's video latent mixes ~3.4 fra
 | Join mechanism | native keyframe channel | per-step noise-domain lock |
 | Model semantics | re-planning from a still | continuation of prior state |
 | VAE touches during sampling | 1-frame plain decode per join | none |
-| Trim per join | 1 duplicate frame | 22-frame overlap |
-
-#### Memory bank
-
-When ON, each shot ALSO references the **START and MIDDLE frames of the previous TWO shots**, sliced straight from their raw latents (the ref2va `minimax_refs` mechanism - context_pin style, no VAE round trips, no TE sessions, 1 latent row per still). The stills keep people, outfits and locations consistent as the camera moves - a clip whose camera pans away keeps its opening location (so a later clip can return to a setting that appeared up to **two clips ago**) and its mid-shot character framing. **Latent handoff already carries the tail** - the next shot's latent opens on the previous shot's last rows, so the bank does not re-slice the end; motion + seam identity continue by construction.
-
-The only mode difference: in `first_frame` the bank never rides at all (shots 2+ are ref-gated to protect the keyframe, and shot 1 has no prior shot), while in `latent_handoff` it rides from shot 2 on.
-
-It complements (and can ride alongside) the character refs `char_refs_all` / `char_refs_index` / `char_audio`: the bank keeps the whole scene (every non-ref-imaged character and prop in frame) continuous, while the refs pin the imaged character's face/outfit/voice.
-
-> **Note**: In `first_frame` mode (a `start_image` provided) the memory bank never rides - every shot after the first is ref-gated so the keyframe keeps its conditioning, and shot 1 has no prior shot to bank. Use `latent_handoff` mode (no `start_image`) if you want the bank active across all shots.
-
-Controls: just `memory_bank` on/off. Depth is fixed at the previous **two** shots (returning to a location more than two clips back is rarely needed, and more rows slow every sampling step); the two stills cost attention on every sampling step.
+| Trim per join | 1 duplicate frame | 73-frame overlap |
 
 #### Character references (`char_refs_all` / `char_refs_index`)
 
@@ -183,7 +171,7 @@ Both can be connected at once (deduped). Connecting neither = no refs. Each imag
 - a DiT-side image ref row (`minimax_refs`) - spatial identity without any temporal claim, so it never fights the join keyframes the way a start-frame copy would;
 - `<Picture N>` vision tokens spliced into every applicable shot's text conditioning - semantic grounding through the text encoder.
 
-Aspect preserved: downscaled toward the generation's pixel area (stock policy), never stretched onto the canvas grid. Complements the memory bank (which carries motion/continuity) and works on shot 1 when no prior shots exist.
+Aspect preserved: downscaled toward the generation's pixel area (stock policy), never stretched onto the canvas grid. Works on shot 1 when no prior shots exist.
 
 > **Note**: refs are **mutually exclusive with `start_image`** - when the latter is given, ALL character refs (images + voice) are dropped with a warning, before any VAE encoding (they share `cond_video_latents`; see the keyframe/ref interaction note above).
 
@@ -203,9 +191,9 @@ A continuous audio track for the WHOLE take (voice recording, song, low-res long
 #### Join mechanics
 
 - **Trim**: shots 2+ drop their replayed head on decode (1 frame in FF, 22 in LH); the latent outputs carry the WRONG head - only the trimmed decoded mp4s / `_master.mp4` are correct to use.
-- **Seam bleed** (`handoff_taper`): percent of each shot that carries the previous shot's motion as a linear fade (15% default = 1.5s of a 10s clip; 0 = hard seam). This makes the seam CONTINUE - the cut stays invisible - it does NOT create a transition. The locked boot rows (~0.9s of exact continuation) plus the fade mean each shot opens with a few seconds of previous action carrying through, then the new description takes over by relay - the point of a long continuous take. **Scene transitions are prompt-authored, not mechanical**: if a shot's prompt opens with its own transition, drop this toward 0-5% so stale motion doesn't fight the described cut. Injection runs while sigma > 0.30 (fixed in the backend), so late detail steps are free to reconcile.
+- **Seam bleed** (`latent_handoff_taper`): percent of each shot that carries the previous shot's motion as a linear fade (15% default = 1.5s of a 10s clip; 0 = hard seam). This makes the seam CONTINUE - the cut stays invisible - it does NOT create a transition. The locked boot rows (~0.9s of exact continuation) plus the fade mean each shot opens with a few seconds of previous action carrying through, then the new description takes over by relay - the point of a long continuous take. **Scene transitions are prompt-authored, not mechanical**: if a shot's prompt opens with its own transition, drop this toward 0-5% so stale motion doesn't fight the described cut. Injection runs while sigma > 0.30 (fixed in the backend), so late detail steps are free to reconcile.
 - **Audio lock** (`audio_lock`): ON = the next shot's audio head is a locked replay of the previous tail, dropped symmetrically on decode. OFF = silent-join: the new head is kept in full and the PREVIOUS tail is trimmed instead (with a fade-out) - script each shot to land its line and hold still for the last beat.
-- **Onset guard**: appends the quietest ~0.4s of the previous shot's audio latent just past the locked span so the model cannot plan speech under the replay.
+- **Onset guard** (`audio_onset_guard`): appends the quietest ~0.4s of the previous shot's audio latent just past the locked span so the model cannot plan speech under the replay.
 - **Assembly**: each shot's frames are muxed straight into the master mp4 as they decode; cosine crossfade welds the audio seams.
 - **Streamed save** (matches the Batch node's save process): the whole take always lands in a DATED `prefix_yyyymmddHHMMSS/` subfolder as ONE mp4 per shot (`shot_01.mp4`, `shot_02`... - each with that shot's own audio) PLUS the combined `_master.mp4` (H.264 + AAC fixed at 24 fps - the model's audio-sync rate; `format`/`frame_compression` controls). Each shot is saved to its own file the moment it decodes and freed, so at most one shot's frames are ever in RAM - a very long take's progress survives even if a later shot fails (the per-shot files stay on disk for manual re-combining), instead of the old single-file path that could overload RAM and lose everything.
 
@@ -220,7 +208,7 @@ A continuous audio track for the WHOLE take (voice recording, song, low-res long
 
 Required: `model`, `clip`, `video_vae`, `audio_vae`, `prompts`, `overall_prompt`, `width`, `height`, `frames_per_shot` (17k+5 grid at 24 fps; trained range ~124-362), `seed`, `steps`, `sampler_name`, `scheduler`.
 
-Optional: `start_image` (I2V first frame of shot 1), `memory_bank`, `handoff_taper`, `onset_guard`, `audio_lock`, `seed_per_shot`, `guide_audio`, `char_refs_all`, `char_refs_index`, `char_audio`, `filename_prefix`, `format`, `frame_compression`.
+Optional: `start_image` (I2V first frame of shot 1), `latent_handoff_taper`, `audio_onset_guard`, `audio_lock`, `context_frames` (multi-frame temporal context, default 5), `pin_renorm` (latent std normalisation, default ON), `color_reanchor` (colour stabilisation + seam match, default ON), `seed_per_shot`, `guide_audio`, `char_refs_all`, `char_refs_index`, `char_audio`, `filename_prefix`, `format`, `frame_compression`, `double_pass` (refine pass), `double_pass_denoise`, `double_pass_steps`, `upscale_factor` (latent upscale before decode).
 
 #### Outputs
 
@@ -293,7 +281,6 @@ Inputs are deliberately shaped around whole-sheet / positional semantics. These 
 - **Multiple voices / dialogue.** Only ONE `char_audio` at a time, ridden by every clip/shot. No "Character 1 voice" vs "Character 2 voice" refs, so a two-character conversation can only be driven by prompt text, the `guide_audio` spine, or sampled speech. Audio is never indexed per clip.
 - **Sparse `start_image` (gaps).** You cannot key only clip 3. Batch: an image batch shorter than the prompt list **reuses its last image** for the remaining clips (never "no keyframe"); a single image keys every clip. Staged: `start_image` is the first frame of shot 1 only (per-index start frames and the "ease into the next shot's start frame" end-keyframe are not built yet).
 - **`start_image` + character refs at once.** They share the `cond_video_latents` slot, so when both are given the character refs (images + voice) are dropped with a warning. No I2V-with-identity combo, either node.
-- **Memory bank spans at most the previous shot.** It cannot bank several prior shots at once (that was the old sliding-window behaviour, replaced by single-shot banking so a new scene is not flooded with stale motion).
 - **Staged per-index start frames / end-keyframe easing** (planned, not built) and arbitrary per-shot identity swaps mid-take (same sparse-targeting gap as above).
 
 ### Silver WAN HuMo Batch

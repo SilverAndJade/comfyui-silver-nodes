@@ -1,7 +1,7 @@
 """Silver H3 Batch - N independent videos, staged like the multishot.
 
 The staged multishot (silver_h3_staged.py) chains its shots into ONE long
-video (continuity / handoff / memory bank). This node instead renders N
+video (continuity / handoff). This node instead renders N
 independent videos from N independent prompts, but keeps the SAME
 swap-minimising discipline: the text encoder, DiT and VAE each load exactly
 ONCE for the whole batch, so producing 5 (or however many) clips costs the
@@ -13,9 +13,8 @@ each of which pays the full TE -> DiT -> VAE load cycle:
                       optional start frame, character image ref and character
                       voice ref are encoded once and reused for every video.
     Phase B  SAMPLE  DiT hot:  every video sampled back-to-back, each its
-                      own standalone clip - NO chaining, NO handoff, NO
-                      memory bank (videos share nothing but the shared
-                      settings / seed policy).
+own standalone clip - NO chaining, NO handoff (videos share nothing but the
+                       shared settings / seed policy).
     Phase C  DECODE + SAVE  VAEs hot: every stored latent decoded (audio
                       pre-pass, then each video decoded, streamed to its own
                       mp4 and freed immediately). At most ONE clip's frames
@@ -45,6 +44,7 @@ import torch
 from comfy_api.latest._util.video_types import VideoContainer, VideoCodec
 from comfy_api.latest._input_impl.video_types import mp4_output_open_kwargs
 import av
+import json
 import math
 from fractions import Fraction
 import folder_paths
@@ -55,7 +55,7 @@ class SilverH3Batch:
 
     Same fast-staging idea as SilverH3StagedMultishot, but the prompts are
     UNRELATED clips: each entry in the prompts list becomes its own video, there is
-    no inter-video continuity, handoff or memory bank. The speed win is purely
+    no inter-video continuity or handoff. The speed win is purely
     from amortising the model loads across the batch - encode every prompt in
     one text-encoder session, sample every video with the DiT resident, decode
     every video with the VAE resident.
@@ -194,6 +194,58 @@ class SilverH3Batch:
                            "higher = lower quality / smaller file. Range 0-32 "
                            "is the useful span; above ~30 quality drops "
                            "noticeably."}),
+            "apply_diffaid": ("BOOLEAN", {
+                "default": False, "label_on": "on", "label_off": "off",
+                "tooltip": "Applies the ComfyUI-DiffAid-Patches MiniMax H3 "
+                           "sparse patch (the diffaid-patches custom node "
+                           "must be installed) to the model BEFORE sampling. "
+                           "The patch clones the model once and is shared by "
+                           "every video (one clone, applied in Phase A, so the "
+                           "DiT still loads once). Raises a hard error if the "
+                           "diffaid-patches node is missing."}),
+            "diffaid_strength": ("FLOAT", {
+                "default": 0.20, "min": -1.0, "max": 1.0, "step": 0.01,
+                "advanced": True,
+                "tooltip": "Diff-Aid strength (the sparse patch's strength "
+                           "parameter). 0.20 is the node/paper default; "
+                           "stronger = harder conditioning focus on the "
+                           "patched blocks."}),
+            "double_pass": ("BOOLEAN", {
+                "default": False, "label_on": "refine pass",
+                "label_off": "single pass",
+                "tooltip": "Second sampling pass over the FULL latent at a "
+                           "reduced denoise (Motion-Director style refine). "
+                           "Re-sampling from the already-sampled latent with "
+                           "only the bottom of the sigma schedule regenerates "
+                           "fine detail and cleans up the image. Costs one "
+                           "extra DiT sample per video (n extra total)."}),
+            "double_pass_denoise": ("FLOAT", {
+                "default": 0.25, "min": 0.01, "max": 1.0, "step": 0.01,
+                "tooltip": "How much of the first-pass latent is re-noised "
+                           "for the refine pass. 0.25 = only the bottom 25% "
+                           "of the sigma schedule - a light refine that keeps "
+                           "composition, 0.5+ visibly rewrites it, 1.0 = a "
+                           "full re-roll of that clip."}),
+            "double_pass_steps": ("INT", {
+                "default": 8, "min": 1, "max": 50,
+                "tooltip": "Sampling steps for the refine pass. 8 is plenty "
+                           "for a 0.25-denoise refine; raise only when "
+                           "denoise is pushed higher or quality demands it."}),
+            "upscale_factor": ("FLOAT", {
+                "default": 1.0, "min": 1.0, "max": 2.0, "step": 0.05,
+                "tooltip": "Spatial latent upscale applied to every video "
+                           "BEFORE decoding: the video latent is trilinearly "
+                           "resampled to this factor BEFORE any double_pass "
+                           "refine (recommended combo: upscale 1.25x + "
+                           "double_pass to fill the new detail). 1.0 = native "
+                           "resolution. The upscaled latent is decoded at the "
+                           "larger size; audio is unaffected. The refine "
+                           "pass's VRAM cost scales with the upscaled "
+                           "area."}),
+        },
+        "hidden": {
+            "prompt": "PROMPT",
+            "extra_pnginfo": "EXTRA_PNGINFO",
         }}
 
     RETURN_TYPES = ("AUDIO_LIST", "STRING", "INT")
@@ -208,6 +260,7 @@ class SilverH3Batch:
         "so you can re-combine them manually if needed.",
         "How many videos actually rendered (one per entry in the prompts "
         "list).")
+    OUTPUT_NODE = True
     FUNCTION = "run"
     CATEGORY = "silver_nodes/sampling"
 
@@ -280,11 +333,18 @@ class SilverH3Batch:
         count and encodes it.
         """
         def __init__(self, path, frame_rate, audio=None, crf=23.0,
-                     bit_depth=8):
+                     bit_depth=8, metadata=None):
             self._path = path
             self._frame_rate = float(frame_rate)
             self._out = av.open(path, **mp4_output_open_kwargs(
                 path, VideoContainer.MP4, VideoCodec.H264))
+            if metadata:
+                # embed the generating workflow/prompt as container tags so
+                # the saved videos can be dragged back into the UI / read by
+                # prompt-extraction tools (movflags=use_metadata_tags is set
+                # in mp4_output_open_kwargs).
+                for _k in metadata:
+                    self._out.metadata[_k] = metadata[_k]
             is_10bit = bit_depth >= 10
             fr = Fraction(round(self._frame_rate * 1000), 1000)
             self._pix_fmt = "yuv420p10le" if is_10bit else "yuv420p"
@@ -359,7 +419,10 @@ class SilverH3Batch:
             seed_per_shot=True,
             filename_prefix="SilverH3Batch",
             format="mp4", frame_compression=23.0,
-            guide_audio=None, step_guide_audio=False, char_audio=None):
+            guide_audio=None, step_guide_audio=False, char_audio=None,
+            apply_diffaid=False, diffaid_strength=0.20,
+            double_pass=False, double_pass_denoise=0.25, double_pass_steps=8,
+            upscale_factor=1.0, prompt=None, extra_pnginfo=None):
         import time
         import torch
         import node_helpers
@@ -367,6 +430,8 @@ class SilverH3Batch:
         from comfy_extras import nodes_custom_sampler as ncs
         from comfy_extras import nodes_minimax_h3 as mmh3
         from comfy_extras.nodes_audio import vae_decode_audio
+        from torch.nn import functional as F
+        import comfy.nested_tensor
 
         t_all = time.time()
 
@@ -395,6 +460,31 @@ class SilverH3Batch:
         print(f"[SilverH3Batch] batch: {n} video(s), {frames_per_shot}f @ "
               f"{width}x{height}, {steps} steps {sampler_name}/{scheduler}.",
               flush=True)
+
+        if apply_diffaid:
+            import importlib
+            _diffaid_cls = None
+            try:
+                _diffaid_pkg = importlib.import_module("diffaid_x_patches")
+                _diffaid_cls = getattr(_diffaid_pkg, "NODE_CLASS_MAPPINGS", {}) \
+                    .get("MiniMaxH3DiffAidSparsePatch")
+            except Exception as e:
+                raise ValueError(
+                    "apply_diffaid is ON but the diffaid-patches custom node "
+                    "is not installed/loadable in this ComfyUI. Install it "
+                    "under custom_nodes/, or turn apply_diffaid off "
+                    f"(import error: {e!r}).")
+            if _diffaid_cls is None:
+                raise ValueError(
+                    "apply_diffaid is ON but MiniMaxH3DiffAidSparsePatch was "
+                    "not found in the diffaid-patches node mappings.")
+            model, _dsum = _diffaid_cls().patch(
+                model, enabled=True, block_indices="1,13,25,37,50",
+                strength=float(diffaid_strength),
+                sigma_start=0.0, sigma_end=1.0, sigma_ramp=0.0,
+                token_weight_mode="none", token_tail=0.35, cond_only=True)
+            print(f"[SilverH3Batch] Diff-Aid ON (model patched once, shared "
+                  f"by every video): {_dsum}", flush=True)
 
         sigmas = ncs.BasicScheduler().get_sigmas(model, scheduler, steps,
                                                  1.0)[0]
@@ -809,6 +899,43 @@ class SilverH3Batch:
             out, _dup = ncs.SamplerCustomAdvanced().sample(
                 noise, guider, sampler, sigmas, latent)
             sdt = time.time() - dt
+            _up = float(upscale_factor)
+            if _up > 1.0:
+                _lat = out["samples"]
+                _parts = (list(_lat.unbind()) if getattr(_lat, "is_nested", False)
+                          else [_lat])
+                _v = _parts[0]
+                _nh = max(1, round(_v.shape[-2] * _up))
+                _nw = max(1, round(_v.shape[-1] * _up))
+                _v = F.interpolate(_v, size=(_v.shape[-3], _nh, _nw),
+                                   mode="trilinear", align_corners=False)
+                vshape = tuple(_v.shape)
+                if len(_parts) > 1:
+                    out["samples"] = comfy.nested_tensor.NestedTensor(
+                        (_v, _parts[1]))
+                else:
+                    out["samples"] = _v
+                print(f"[SilverH3Batch] video {si + 1}: video latent upscaled "
+                      f"{_v.shape[-2]}x{_v.shape[-1]} (x{_up:.2f}); audio "
+                      f"unchanged.", flush=True)
+                del _lat, _parts, _v
+            if double_pass:
+                _sigmas2 = ncs.BasicScheduler().get_sigmas(
+                    model, scheduler, double_pass_steps,
+                    double_pass_denoise)[0]
+                _noise2 = ncs.RandomNoise().get_noise(shot_seed + 10000000)[0]
+                _guider2 = ncs.BasicGuider().get_guider(model, cond)[0]
+                if spine_seg is not None:
+                    _arm(_guider2, None, None, None, None, 0.0, 0,
+                         vshape, ashape, spine_seg=spine_seg)
+                _dt2 = time.time()
+                out, _dup = ncs.SamplerCustomAdvanced().sample(
+                    _noise2, _guider2, sampler, _sigmas2, out)
+                print(f"[SilverH3Batch] video {si + 1}: second pass done - "
+                      f"{double_pass_steps} steps @ "
+                      f"denoise {double_pass_denoise:.2f} "
+                      f"({_dur(time.time() - _dt2)}).", flush=True)
+                del _sigmas2, _noise2, _guider2
             lat = out["samples"]
             parts = (list(lat.unbind()) if getattr(lat, "is_nested", False)
                      else [lat])
@@ -864,6 +991,15 @@ class SilverH3Batch:
         full_output_folder = None
         filename = None
         master_total_frames = 0
+        # workflow/prompt metadata, embedded in every mp4 like the stock save
+        # nodes (prompt = API prompt, workflow = UI graph). Built once for the
+        # master + every per-clip file.
+        _meta = {}
+        if prompt is not None:
+            _meta["prompt"] = json.dumps(prompt)
+        if extra_pnginfo is not None:
+            for _k in extra_pnginfo:
+                _meta[_k] = json.dumps(extra_pnginfo[_k])
         if combine_videos:
             # MASTER AUDIO: when a guide_audio was supplied, lay the FULL
             # original guide track, unprocessed, over the whole combined video
@@ -890,7 +1026,7 @@ class SilverH3Batch:
                                        f"{filename}_{stamp}_master.mp4")
             master_writer = self._MP4Stream(
                 master_path, _FPS, audio=master_audio,
-                crf=float(frame_compression))
+                crf=float(frame_compression), metadata=_meta)
 
         for si, s in enumerate(stored):
             imgs = video_vae.decode(s["video"])
@@ -912,7 +1048,8 @@ class SilverH3Batch:
                     full_output_folder,
                     f"{filename}_{stamp}_clip_{si + 1:02d}.mp4")
                 cw = self._MP4Stream(clip_path, _FPS, audio=aud_dict,
-                                     crf=float(frame_compression))
+                                     crf=float(frame_compression),
+                                     metadata=_meta)
                 cw.add_frames(imgs)
                 cw.close()
                 saved_files.append(clip_path)
@@ -924,7 +1061,8 @@ class SilverH3Batch:
                 path = os.path.join(full_output_folder,
                                     f"{filename}_{stamp}_{si + 1:02d}.mp4")
                 cw = self._MP4Stream(path, _FPS, audio=aud_dict,
-                                     crf=float(frame_compression))
+                                     crf=float(frame_compression),
+                                     metadata=_meta)
                 cw.add_frames(imgs)
                 cw.close()
                 saved_files.append(path)

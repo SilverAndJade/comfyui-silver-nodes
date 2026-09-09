@@ -386,12 +386,29 @@ class SilverFolderImageLoader:
         if not loaded_images:
             raise ValueError("[FolderImageLoader] No valid images could be loaded from the specified folder")
         
-        # Check for consistent image sizes before stacking
-        image_shapes = [img.shape for img in loaded_images]
-        if len(set(image_shapes)) > 1:
-            raise ValueError("[FolderImageLoader] Different size images detected in the batch. Please only load one image at a time, or ensure all images are the same size.")
+        # Resize all images to match the first image's dimensions using center-crop and resize
+        target_h, target_w = loaded_images[0].shape[1], loaded_images[0].shape[2]
+        resized_images = []
+        for img in loaded_images:
+            if img.shape[1] == target_h and img.shape[2] == target_w:
+                resized_images.append(img)
+            else:
+                pil_img = Image.fromarray((img[0].numpy() * 255).astype(np.uint8))
+                src_w, src_h = pil_img.size
+                target_ratio = target_w / target_h
+                src_ratio = src_w / src_h
+                if src_ratio > target_ratio:
+                    new_w = int(src_h * target_ratio)
+                    left = (src_w - new_w) // 2
+                    pil_img = pil_img.crop((left, 0, left + new_w, src_h))
+                else:
+                    new_h = int(src_w / target_ratio)
+                    top = (src_h - new_h) // 2
+                    pil_img = pil_img.crop((0, top, src_w, top + new_h))
+                pil_img = pil_img.resize((target_w, target_h), Image.LANCZOS)
+                resized_images.append(self._process_image(pil_img))
 
-        images = torch.cat(loaded_images, dim=0)
+        images = torch.cat(resized_images, dim=0)
 
         # Update index based on action
         if action == "increment":

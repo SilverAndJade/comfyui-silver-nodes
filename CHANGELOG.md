@@ -5,7 +5,57 @@ All notable changes to the comfyui-silver-nodes project will be documented in th
 ## [Unreleased]
 
 ### Added
-- **Seam bleed control** (`handoff_taper`): percent of each shot that
+- **Motion Director multi-frame context** (`context_frames` input, default 5):
+  shots 2+ now feed multiple decoded tail frames as temporal context for the
+  next shot's DiT pass, instead of a single keyframe. Options snap to the H3
+  temporal grid (1, 5, 22, 39 pixel frames). Higher values give stronger
+  shot-to-shot continuity at the cost of one extra VAE encode per join. The
+  layout monkey-patch from Motion Director is applied at import to support
+  multi-frame keyframe positioning.
+- **Pin Renorm** (`pin_renorm` input, default ON): normalises the std of each
+  shot's latent tail to match the chain baseline (shot 0), preventing
+  brightness/contrast drift between shots at zero cost. A no-op when the
+  latent stats already match.
+- **Color Re-anchor** (`color_reanchor` input, default ON): stabilises
+  per-frame RGB statistics across shots (nudges each context frame's
+  mean/std toward the chain root) and applies a seam colour match at each
+  cut boundary (affine transform faded over 24 frames). Reduces
+  exposure/white-balance jumps between shots. The anchor is established on
+  shot 0 and updated after each seam match.
+- **Latent tail cache** (AV-latent cache): the raw latent tail from each shot
+  is cached to CPU. Subsequent shots can inject it directly without a
+  VAE round-trip, reducing decode/encode overhead on long chains.
+- **Explicit fl2v/ref2v continuity toggle on Staged** (`ref2v` BOOLEAN input):
+  the shot-to-shot continuity mode is now USER-SELECTED, no longer inferred
+  from the inputs. Both modes carry motion through the latent handoff (head
+  clone + per-step video/audio locks + taper):
+  - **OFF / fl2v** (`ref2v=False`): `start_image` (if connected) seeds clip 1
+    as I2V; shots 2+ always chain via the keyframe channel (`last frame is
+    first frame`). `char_refs_*` / `char_audio` are ignored (with a warning).
+  - **ON / ref2v** (`ref2v=True`): `start_image` is ignored (with a warning).
+    Shots 2+ inject the previous shot's decoded last frame as the FIRST
+    reference block (`minimax_refs`) before `char_refs_*`, so the character
+    identity rides the ref channel from a predetermined anchor. `start_image`
+    is not needed in either mode (fl2v will pure-T2V clip 1 if unconnected).
+  - Wire a ref2v/ref2va model when ON; fl2v model when OFF.
+- **Fixed latent_handoff carry on Staged**: the per-step video lock and the
+  graded seam taper (`latent_handoff_taper`) are now WIRED into the handoff
+  arm (they were captured but passed as `None`, so only the init-time 5-row
+  clone carried video and the 15%/1.5s taper never ran). Shots 2+ now
+  re-assert the previous tail through the structure phase (sigma > release)
+  and bleed it forward by the taper length - so character/scene identity is
+  carried shot-to-shot in pure text-to-video, not drift-free re-planned by
+  each prompt. The refine (`double_pass`) arm gets the same locks, rescaled
+  when `upscale_factor > 1`.
+- **Staged output refine (ported from Batch)**: `double_pass` /
+  `double_pass_denoise` / `double_pass_steps` / `upscale_factor` now ride
+  the Silver H3 Staged node too. Each shot is upscaled (trilinear video
+  latent, audio untouched) then optionally re-sampled at reduced denoise -
+  same order and semantics as the Batch node. The shot chain is kept at
+  native resolution (`video_final` is decoded in Phase C; the handoff seed
+  stays native), and the audio/video locks are re-applied during the refine
+  so continuity survives it.
+- **Seam bleed control** (`latent_handoff_taper`): percent of each shot that
   carries the previous shot's motion as a linear fade (10% of a 10s clip =
   1s; 15% default; 0 = hard seam). The join is a relay: a few seconds of
   the previous action carries into the new shot, then the new description
@@ -13,6 +63,10 @@ All notable changes to the comfyui-silver-nodes project will be documented in th
   transition control; scene transitions are prompt-authored (drop toward
   0-5% when a shot's prompt opens with one, so stale motion doesn't fight
   it).
+- **Staged continuation inputs renamed for clarity**: `handoff_taper` ->
+  `latent_handoff_taper`, `onset_guard` -> `audio_onset_guard` (groups the
+  latent-chain and audio-group knobs respectively). Save the workflow after
+  updating.
 - **Character reference LISTS on both H3 nodes**: two IMAGE inputs replace
   the old single sheet + toggle pair (the toggles are gone - connecting an
   input IS the toggle):
@@ -31,7 +85,7 @@ All notable changes to the comfyui-silver-nodes project will be documented in th
 - **Join timing controls simplified on the staged node**: `handoff_release`
   removed (threshold fixed at `_HO_RELEASE = 0.30` - the sigma below which
   the lock/taper stops injecting, so late detail steps reconcile freely).
-  `handoff_taper` changed from latent rows to a **percent of the shot's
+  `latent_handoff_taper` changed from latent rows to a **percent of the shot's
   duration** (converted backend-side via the ~4 frames/row mapping).
 - **Playback rate fixed at 24 fps on both nodes**: `frame_rate` input
   removed - H3's audio sync requires 24 fps, and any other rate desynced
@@ -39,7 +93,7 @@ All notable changes to the comfyui-silver-nodes project will be documented in th
 - **Staged `latent_handoff` join-replay**: shots 2+ cloned the previous
   tail's last rows but never trimmed the replayed head, so a new scene opened
   by replaying the previous scene (~3.5s). Handoff `_TRIM` is now
-  `5 + 17*(_HO_ROWS-1)` = 73 decoded frames, applied to shot 2+ video AND
+  `17*(_HO_ROWS-1)` = 68 decoded frames, applied to shot 2+ video AND
   audio (sample-aligned).
 - **Refs + start_image mutually exclusive, enforced with a warning on both
   nodes**: `start_image` (keyframes) + character refs share `cond_video_latents`
@@ -49,17 +103,13 @@ All notable changes to the comfyui-silver-nodes project will be documented in th
 - **Staged continuity is now AUTO-SELECTED** (the `continuity` widget is
   removed): a `start_image` provided -> `first_frame` keyframe chaining;
   WITHOUT one the shots join by `latent_handoff` (the default, refs or not).
-- **Staged memory bank is now two stills from the previous TWO shots**: when
-  ON, a shot references the **START and MIDDLE frames** (1 latent row each)
-  of the last 2 prior shots - people/outfits/locations stay consistent as
-  the camera moves, and a later clip can return to a setting that appeared
-  up to two clips ago. Depth (2) and still size (5 frames = 1 latent row)
-  are FIXED constants in the backend - `bank_frames` / `bank_depth` are no
-  longer inputs; `memory_bank` is the only on/off switch. The old end
-  anchor is gone: latent handoff already carries the previous tail's motion
-  + identity into the next shot by construction.
 
 ### Changed
+- **Memory bank removed on the staged node** (`memory_bank` gone): the
+  per-step reference stills from prior shots degraded output quality and
+  caused transition stutters in practice, so deliberate consistency is left
+  to `char_refs_index` (or `start_image`) instead. The latent handoff / 
+  first-frame keyframe chaining remains the continuity mechanism.
 - **Silver H3 Staged prompts input now matches the Batch node exactly:** one
   MASTER prompt in `overall_prompt` (prepended to EVERY shot => `"overall
   shot"`) plus a `prompts` STRING_LIST with one prompt PER SHOT. The old
@@ -171,20 +221,13 @@ All notable changes to the comfyui-silver-nodes project will be documented in th
     in the ENCODE phase; every shot's full audio stream is locked to its
     time-slice of it at every sampling step (voice/lipsync held across the
     whole take, shot stride compensates the join trim)
-  - `continuity` modes: **first_frame** (default) chains shots through H3's
-    NATIVE keyframe channel - each shot opens on the previous shot's
-    decoded last frame (stock-I2V mechanics, 1 duplicate frame trimmed per
-    join, pixels decoded hot during Phase B and cached so every frame is
-    VAE-decoded exactly once); **latent_handoff** (legacy) keeps the
-    per-step noise-domain tail lock (22-frame overlap), kept for comparison
-    after it rendered planner-conflict artifacts on current checkpoints
-  - MEMORY BANK (`memory_bank`): each shot's conditioning
-    carries two reference STILLS (the previous shot's opening + mid rows)
-    sliced straight from prior shots' raw latents (the ref2va `minimax_refs`
-    mechanism, latent-only - context_pin style, no VAE round trip, no TE
-    sessions), keeping faces/outfits AND whole-scene identity/location
-    consistent across scene changes - every non-ref-imaged character and
-    prop in frame rides along; fully optional
+  - `continuity` modes: **first_frame** (given a `start_image`) chains shots
+    through H3's NATIVE keyframe channel - each shot opens on the previous
+    shot's decoded last frame (stock-I2V mechanics, 1 duplicate frame trimmed
+    per join, pixels decoded hot during Phase B and cached so every frame is
+    VAE-decoded exactly once); **latent_handoff** (the default) keeps the
+    per-step noise-domain tail lock (73 decoded-frame overlap, regenerated and
+    trimmed per join)
   - CHARACTER REFERENCE (`char_image`): one image encoded once in the
     ENCODE phase and ridden by EVERY shot through BOTH ref2va channels -
     DiT-side `minimax_refs` rows plus `<Picture N>` vision tokens in every

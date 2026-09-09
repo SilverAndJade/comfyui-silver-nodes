@@ -25,7 +25,7 @@ master is one continuous piece.
 | | Silver H3 Batch | Silver H3 Staged Multishot |
 |---|---|---|
 | Output | N **independent** clips (+ optional stitched master) | ONE long **continuous** take from N shots |
-| Chaining | none (memory-bank/handoff deliberately excluded) | first_frame or latent_handoff |
+| Chaining | none (handoff deliberately excluded) | first_frame or latent_handoff |
 | Save | per-clip mp4s + master on demand | one streamed `_master.mp4`, always |
 | Keyframe source | user `start_image` sheet, one per clip | user sheet OR prior shot's decoded last frame |
 | Prompt inputs | `prompts` STRING_LIST + `overall_prompt` | **same** `prompts` + `overall_prompt` |
@@ -91,8 +91,8 @@ The mode is implied by the inputs:
   shot's head rows are cloned from the previous shot's raw tail latents
   (5 video latent rows ~= 3.5s, 37 audio cols ~= 0.92s at 40 latent-fps) so
   the new shot "wakes up inside" the last shot's motion. The replayed decoded
-  head is now TRIMMED (see join-trim fix, #2 closed). Character refs, the
-  memory bank and `guide_audio` all ride in this mode.
+  head is now TRIMMED (see join-trim fix, #2 closed). Character refs and
+  `guide_audio` all ride in this mode.
 - **`start_image` + character refs together**: refs are DROPPED with a warning
   (they wipe the keyframe latents); start-image chaining wins, and the TE
   tokenization is re-built WITHOUT the ref items so no orphan `<Picture N>`
@@ -126,12 +126,6 @@ Currently staged keys **shot 1 only**. The following per-index spec is planned:
 - `char_audio` (ONE voice) encoded once and ridden by every clip/shot as an
   audio ref row + `<Audio N>` token. Only a single voice at a time.
 - In handoff mode every ref block rides every shot (no FF keyframe guard).
-- **Memory bank (staged)**: every shot banks the PREVIOUS shot only as two
-  reference STILLS - its opening + mid rows, 1 latent row each - keeping
-  identity AND location (every non-ref-imaged character/prop in frame)
-  consistent when the camera pans between scenes; `memory_bank` = on/off.
-  Latent handoff carries the tail's motion/identity separately; `bank_frames`
-  is gone.
 
 ### guide_audio spine
 
@@ -159,7 +153,7 @@ outputs are gone — only the trimmed decoded mp4s are correct to use.
    head (~5 latent rows) was never trimmed in phase C (`_TRIM = 0` on the
    handoff path), so the master REPLAYED shot N's tail (scene-2 "driving"
    started by replaying scene-1 "getting in the car"). FIXED: handoff
-   `_TRIM` is now `5 + 17*(_HO_ROWS-1)` = 73 decoded frames for a 5-row
+   `_TRIM` is now `17*(_HO_ROWS-1)` = 68 decoded frames for a 5-row
 clone, applied to shot 2+ heads (video AND audio stay sample-aligned). The
     join lands on the first row after the clone instead of replaying the scene.
 3. **FF ref/vision-token asymmetry (CLOSED)**: in first_frame, shot 2+ dropped
@@ -167,11 +161,13 @@ clone, applied to shot 2+ heads (video AND audio stay sample-aligned). The
    tokens into those shots' text. With the auto rule (refs -> handoff) this
    path only survives the start_image+refs "drop refs" branch, which now
    re-tokenizes without the ref items (`_DROP_REFS`, Phase A).
-4. **Memory bank flooded new scenes (CLOSED)**: the bank used a sliding
-   window over several prior shots' motion (up to ~18 ref rows at old
-   defaults). Now banks the PREVIOUS shot only as two stills (opening + mid
-   rows, 2 ref rows); `bank_frames` and `bank_depth` are gone with the end
-   anchor (handoff covers the tail).
+4. **Memory bank degraded quality (CLOSED - REMOVED)**: the bank started as
+   a sliding window over several prior shots' motion (up to ~18 ref rows at
+   old defaults), then was reduced to two stills from the previous shot, and
+   finally REMOVED ENTIRELY (`memory_bank` is gone): even the reduced stills
+   cost per-step attention and made quality drop + transition stutters in
+   practice. Deliberate consistency is left to `char_refs_index` / 
+   `char_refs_all` / `start_image`.
 
 ## Workflow matrix (agreed spec)
 
