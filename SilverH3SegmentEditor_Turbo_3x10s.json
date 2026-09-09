@@ -1,0 +1,125 @@
+{
+  "name": "Silver H3 Segment Editor - Turbo 3x10s",
+  "version": "1.0.0",
+  "author": "Silver",
+  "description": "Workflow for editing MiniMax-H3 video segments using the Silver H3 Segment Editor node. Loads a master video from a previous staged run and allows editing of specific segments with fl2v continuity preservation.",
+  "tags": ["video", "editing", "fl2v", "segment", "turbosecond", "10s"],
+  "nodes": [
+    {
+      "name": "Load Master Video",
+      "id": "load_master_video",
+      "position": {"x": 100, "y": 200},
+      "data": {
+        "class_type": "LoadVideo",
+        "inputs": {
+          "video_path": "/path/to/your/output/SilverH3_20250909_123045/Master_video_20250909_123045.mp4"
+        }
+      }
+    },
+    {
+      "name": "Silver H3 Segment Editor",
+      "id": "segment_editor",
+      "position": {"x": 400, "y": 200},
+      "data": {
+        "class_type": "SilverH3SegmentEditor",
+        "inputs": {
+          "model": "$model",
+          "clip": "$clip",
+          "vae": "$vae",
+          "audio_vae": "$audio_vae",
+          "guide_audio": null,
+          "source_video": "$output_video",
+          "timeline_start": 5.0,
+          "timeline_duration": 10.0,
+          "filename_prefix": "SilverH3_SegmentEditor",
+          "format": "mp4",
+          "frame_compression": 23
+        }
+      }
+    },
+    {
+      "name": "Model Loader",
+      "id": "model_loader",
+      "position": {"x": 100, "y": 50},
+      "data": {
+        "class_type": "MinimaxH3ModelLoader",
+        "inputs": {
+          "model_name": "minimax_h3_fused_refdelta_r1024_turbo8_mystic07_int8_convrot.safetensors",
+          "lora_name": "MINIM/Turbo/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+          "lora_scale": 0.75
+        }
+      }
+    },
+    {
+      "name": "Text Encoder",
+      "id": "text_encoder",
+      "position": {"x": 100, "y": 100},
+      "data": {
+        "class_type": "MiniMaxTextEncoder",
+        "inputs": {
+          "embedding_directory": "/path/to/text_encoder"
+        }
+      }
+    },
+    {
+      "name": "VAE Loader",
+      "id": "vae_loader",
+      "position": {"x": 100, "y": 150},
+      "data": {
+        "class_type": "MiniMaxVAELoader",
+        "inputs": {
+          "vae_name": "minimax_h3_vae.safetensors"
+        }
+      }
+    },
+    {
+      "name": "Audio VAE Loader",
+      "id": "audio_vae_loader",
+      "position": {"x": 100, "y": 250},
+      "data": {
+        "class_type": "MiniMaxAudioVAELoader",
+        "inputs": {
+          "audio_vae_name": "minimax_h3_audio_vae.safetensors"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "source": "model_loader",
+      "target": "segment_editor",
+      "source_output": "MODEL",
+      "target_input": "model"
+    },
+    {
+      "source": "text_encoder",
+      "target": "segment_editor",
+      "source_output": "CLIP",
+      "target_input": "clip"
+    },
+    {
+      "source": "vae_loader",
+      "target": "segment_editor",
+      "source_output": "VAE",
+      "target_input": "vae"
+    },
+    {
+      "source": "audio_vae_loader",
+      "target": "segment_editor",
+      "source_output": "VAE",
+      "target_input": "audio_vae"
+    },
+    {
+      "source": "load_master_video",
+      "target": "segment_editor",
+      "source_output": "VIDEO",
+      "target_input": "source_video"
+    }
+  ],
+  "preview_images": [
+    {
+      "path": "/path/to/your/output/SilverH3_20250909_123045/SilverH3_SegmentEditor_20250909_123045_master.mp4",
+      "description": "Result of segment editing workflow"
+    }
+  ]
+}
