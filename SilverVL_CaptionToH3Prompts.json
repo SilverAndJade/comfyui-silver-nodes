@@ -1,0 +1,135 @@
+{
+  "folder_loader": {
+    "inputs": {
+      "folder_path": "output",
+      "batch_size": 1,
+      "current_index": 0,
+      "action": "increment",
+      "sort_by": "name",
+      "sort_order": "ascending",
+      "load_companion_text": "disable"
+    },
+    "class_type": "SilverFolderImageLoader",
+    "_meta": {
+      "title": "Silver Folder Image Loader (auto-increment)"
+    }
+  },
+  "clip_loader": {
+    "inputs": {
+      "clip_name": "qwen3_vl_8b_instruct.safetensors",
+      "type": "ideogram4"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Full Qwen3-VL-8B (CLIPLoader type=ideogram4)"
+    }
+  },
+  "textgen": {
+    "inputs": {
+      "clip": [
+        "clip_loader",
+        0
+      ],
+      "prompt": "You are a master video-prompt writer for MiniMax-H3. Analyze the provided image and infer its genre/theme (e.g. cinematic fantasy, dark horror, action thriller, romantic drama, sci-fi) purely from what is visible. Your goal is to translate this still image into a highly engaging, visually stunning 10-second movie-trailer-style shot. Write exactly ONE complete H3 text-to-video prompt as a SINGLE LINE of continuous plain text, with no line breaks, no section headings, no markdown, and no surrounding quotes. Write the sections inline with colons in this order: (1) subject_definitions: a concise list of key subjects and defining traits; (2) integrated_multimodal_description: one immersive cinematic sentence that scripts a dynamic 10-second continuous shot with a clear trailer-style progression—starting with an atmospheric hook, escalating through dynamic camera movement (e.g., accelerating push-in, sweeping orbit, or dramatic rack focus) and intense character action, and peaking in a striking visual climax or reveal (if a character speaks, include their exact line in double quotation marks at the climax); (3) overall_soundscape: environmental audio that builds in intensity alongside the visual action; (4) non_diegetic_music: a musical score description that escalates to a trailer-style crescendo, bass drop, or epic climax matching the genre. Output ONLY that single prompt line and nothing else.",
+      "image": [
+        "folder_loader",
+        0
+      ],
+      "max_length": 2048,
+      "sampling_mode": "on",
+      "thinking": false,
+      "use_default_template": true
+    },
+    "class_type": "TextGenerate",
+    "_meta": {
+      "title": "Generate Text (Qwen3-VL caption -> themed H3 single line)"
+    }
+  },
+  "filename_string": {
+    "inputs": {
+      "input": [
+        "folder_loader",
+        1
+      ]
+    },
+    "class_type": "Basic data handling: CastToString",
+    "_meta": {
+      "title": "Filenames -> string"
+    }
+  },
+  "collapse": {
+    "inputs": {
+      "find": "\\s+",
+      "replace": " ",
+      "text": [
+        "textgen",
+        0
+      ]
+    },
+    "class_type": "Text Find and Replace",
+    "_meta": {
+      "title": "Collapse whitespace to single line"
+    }
+  },
+  "basename": {
+    "inputs": {
+      "find": ".*?['\"]([^'\"]+)['\"].*",
+      "replace": "\\1",
+      "text": [
+        "filename_string",
+        0
+      ]
+    },
+    "class_type": "Text Find and Replace",
+    "_meta": {
+      "title": "Strip image extension from filename"
+    }
+  },
+  "join_path": {
+    "inputs": {
+      "path1": [
+        "folder_loader",
+        4
+      ],
+      "path2": [
+        "basename",
+        0
+      ]
+    },
+    "class_type": "Basic data handling: PathJoin",
+    "_meta": {
+      "title": "Build save path (same folder as image)"
+    }
+  },
+  "set_ext": {
+    "inputs": {
+      "path": [
+        "join_path",
+        0
+      ],
+      "extension": ".txt"
+    },
+    "class_type": "Basic data handling: PathSetExtension",
+    "_meta": {
+      "title": "Force .txt extension"
+    }
+  },
+  "save_txt": {
+    "inputs": {
+      "text": [
+        "collapse",
+        0
+      ],
+      "path": [
+        "set_ext",
+        0
+      ],
+      "create_dirs": true,
+      "encoding": "utf-8"
+    },
+    "class_type": "Basic data handling: PathSaveStringFile",
+    "_meta": {
+      "title": "Save single-line prompt to <image>.txt"
+    }
+  }
+}

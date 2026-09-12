@@ -250,7 +250,15 @@ class SilverFolderImageLoader:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "folder_path": ("STRING", {"default": ""}),
+                "folder_path": ("STRING", {"default": "",
+                                           "tooltip": "Folder containing the "
+                                                      "images. Relative paths "
+                                                      "resolve against the "
+                                                      "ComfyUI base dir, so use "
+                                                      "'output' for the ComfyUI "
+                                                      "output folder (portable, "
+                                                      "safe to share) or an "
+                                                      "absolute path."}),
                 "batch_size": ("INT", {
                     "default": 1,  
                     "min": 1, 
@@ -266,11 +274,21 @@ class SilverFolderImageLoader:
                 "action": (["fixed", "increment", "decrement", "increment_wrap", "reset"], ),
                 "sort_by": (["name", "created", "modified", "size"], ),
                 "sort_order": (["ascending", "descending"], {"default": "ascending"}),
+            },
+            "optional": {
+                "load_companion_text": (["disable", "enable"], {
+                    "default": "disable",
+                    "tooltip": "enable = for every loaded image also read the "
+                               "companion text file with the SAME basename + "
+                               ".txt (in the same folder) and output its "
+                               "contents as the prompts STRING_LIST, aligned "
+                               "1:1 with the loaded images. Missing files "
+                               "become blank entries."}),
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING", "INT")
-    RETURN_NAMES = ("images", "filenames", "current_index")
+    RETURN_TYPES = ("IMAGE", "STRING", "INT", "STRING_LIST", "STRING")
+    RETURN_NAMES = ("images", "filenames", "current_index", "prompts", "folder_path")
     FUNCTION = "load_images_from_folder"
     CATEGORY = "image"
     
@@ -356,8 +374,13 @@ class SilverFolderImageLoader:
 
     def load_images_from_folder(self, folder_path: str, batch_size: int = 1, 
                               current_index: int = 0, action: str = 'fixed',
-                              sort_by: str = 'name', sort_order: str = 'ascending'):
+                              sort_by: str = 'name', sort_order: str = 'ascending',
+                              load_companion_text: str = 'disable'):
         """Load images from a specified folder with flexible index management."""
+        # Resolve relative paths against the ComfyUI base dir so portable
+        # values like "output" (ComfyUI's output folder) work when shared.
+        if not os.path.isabs(folder_path):
+            folder_path = os.path.join(folder_paths.base_path, folder_path)
         if not os.path.isdir(folder_path):
             raise ValueError(f"[FolderImageLoader] Invalid folder path: {folder_path}")
 
@@ -366,14 +389,18 @@ class SilverFolderImageLoader:
         if not image_files:
             raise ValueError(f"[FolderImageLoader] No supported image files found in {folder_path}")
 
-        # Ensure index is within bounds after sorting
-        current_idx = max(0, min(current_index, len(image_files) - 1))
+        # current_index is a BATCH index (which chunk of batch_size images
+        # to load), so the starting file offset is current_index * batch_size.
+        # Clamp to the last valid batch (allowing a partial final batch).
+        max_batch_idx = max(0, (len(image_files) - 1) // batch_size)
+        current_idx = max(0, min(current_index, max_batch_idx))
+        start_file = current_idx * batch_size
 
         # Load images
         loaded_images = []
         filenames = []
         for i in range(batch_size):
-            idx = (current_idx + i) % len(image_files)
+            idx = (start_file + i) % len(image_files)
             image_path = os.path.join(folder_path, image_files[idx])
             try:
                 with Image.open(image_path) as img:
@@ -410,20 +437,40 @@ class SilverFolderImageLoader:
 
         images = torch.cat(resized_images, dim=0)
 
-        # Update index based on action
+        # Update index based on action. All references are batch indexes,
+        # so incrementing moves to the next batch (advances batch_size files).
         if action == "increment":
-            next_index = (current_idx + 1) % len(image_files)
+            next_index = (current_idx + 1) % (max_batch_idx + 1)
         elif action == "decrement":
-            next_index = (current_idx - 1) if current_idx > 0 else len(image_files) - 1
+            next_index = (current_idx - 1) if current_idx > 0 else max_batch_idx
         elif action == "increment_wrap":
-            next_index = (current_idx + 1) % len(image_files)
+            next_index = (current_idx + 1) % (max_batch_idx + 1)
         else:  # "fixed" or "reset"
             next_index = current_idx
 
         self.current_index = current_idx
         self.next_index = next_index
 
-        return {"ui": {"next_index": [next_index]}, "result": (images, filenames, next_index)}
+        # Companion text: read <basename>.txt next to each loaded image
+        # and emit its contents as the prompts STRING_LIST (1:1 with images).
+        prompts = []
+        if load_companion_text == "enable":
+            for fname in filenames:
+                txt_path = os.path.join(
+                    folder_path, os.path.splitext(fname)[0] + ".txt")
+                try:
+                    with open(txt_path, "r", encoding="utf-8",
+                              errors="replace") as f:
+                        prompts.append(f.read().strip())
+                except Exception as e:
+                    print(f"[FolderImageLoader] No companion text for "
+                          f"{fname}: {e}")
+                    prompts.append("")
+        else:
+            prompts = [""] * len(filenames)
+
+        return {"ui": {"next_index": [next_index]},
+                "result": (images, filenames, next_index, prompts, folder_path)}
 
 class LazyAudioMap(Mapping):
     def __init__(self, file, start_time, duration):

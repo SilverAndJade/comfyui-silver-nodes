@@ -1,0 +1,111 @@
+{
+  "unet": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Load H3 UNET (INT8)"
+    }
+  },
+  "video_vae": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Load Video VAE"
+    }
+  },
+  "audio_vae": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "_meta": {
+      "title": "Load Audio VAE"
+    }
+  },
+  "clip_loader": {
+    "class_type": "H3ClipLoaderAny",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "mmproj_name": "(auto)"
+    },
+    "_meta": {
+      "title": "Load H3 CLIP (NVFP4)"
+    }
+  },
+  "sage_patch": {
+    "class_type": "PathchSageAttentionKJ",
+    "inputs": {
+      "model": ["unet", 0],
+      "sage_attention": "auto",
+      "allow_compile": false
+    },
+    "_meta": {
+      "title": "SageAttention patch"
+    }
+  },
+  "turbo_lora": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["sage_patch", 0],
+      "lora_name": "MINIM/Turbo/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "Turbo LoRA"
+    }
+  },
+  "folder_loader": {
+    "class_type": "SilverFolderImageLoader",
+    "inputs": {
+      "folder_path": "output",
+      "batch_size": 4,
+      "current_index": 0,
+      "action": "fixed",
+      "sort_by": "name",
+      "sort_order": "ascending",
+      "load_companion_text": "enable"
+    },
+    "_meta": {
+      "title": "Silver Folder Image Loader (batch + companion txt)"
+    }
+  },
+  "h3_batch": {
+    "class_type": "SilverH3Batch",
+    "inputs": {
+      "model": ["turbo_lora", 0],
+      "clip": ["clip_loader", 0],
+      "video_vae": ["video_vae", 0],
+      "audio_vae": ["audio_vae", 0],
+      "prompts": ["folder_loader", 3],
+      "start_image": ["folder_loader", 0],
+      "width": 640,
+      "height": 640,
+      "frames_per_shot": 243,
+      "seed": 42,
+      "steps": 8,
+      "sampler_name": "res_multistep",
+      "scheduler": "simple",
+      "overall_prompt": "",
+      "combine_videos": false,
+      "seed_per_shot": true,
+      "filename_prefix": "SilverH3FolderBatch",
+      "format": "mp4",
+      "frame_compression": 23.0,
+      "apply_diffaid": false,
+      "diffaid_strength": 0.2,
+      "double_pass": false,
+      "double_pass_denoise": 0.25,
+      "double_pass_steps": 8,
+      "upscale_factor": 1.0
+    },
+    "_meta": {
+      "title": "Silver H3 Batch (folder images + companion txt prompts)"
+    }
+  }
+}

@@ -16,11 +16,15 @@ from .silver_wan_humo_batch import (
     NODE_CLASS_MAPPINGS as _WHB_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _WHB_DISPLAY,
 )
+from .silver_h3_segment_editor import (
+    NODE_CLASS_MAPPINGS as _SE_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _SE_DISPLAY,
+)
 WEB_DIRECTORY = "./js"
 
 NODE_CLASS_MAPPINGS = {**_NODE_MAPPINGS, **_CACHE_MAPPINGS, **_H3_MAPPINGS,
-                       **_H3B_MAPPINGS, **_WHB_MAPPINGS}
+                       **_H3B_MAPPINGS, **_WHB_MAPPINGS, **_SE_MAPPINGS}
 NODE_DISPLAY_NAME_MAPPINGS = {**_NODE_DISPLAY, **_CACHE_DISPLAY, **_H3_DISPLAY,
-                              **_H3B_DISPLAY, **_WHB_DISPLAY}
+                              **_H3B_DISPLAY, **_WHB_DISPLAY, **_SE_DISPLAY}
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
