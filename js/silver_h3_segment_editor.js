@@ -1,10 +1,14 @@
-// Silver H3 Segment Editor - in-node preview, playback and range picking.
+// Silver H3 video-picker + preview panel for SilverH3SegmentEditor and
+// SilverH3VideoEditor.
 //
-// Adds a DOM panel to the SilverH3SegmentEditor node that:
-//   - previews/plays the selected source video (served from the input folder),
-//   - lets you UPLOAD a new video straight from the node,
-//   - picks the SECTION (crop) of the main video via source_start/source_end,
-//   - picks the SEGMENT to regenerate via timeline_start/timeline_duration.
+// Both nodes share one panel (video preview/playback, upload from the node,
+// and range picking). What the panel shows is driven by a per-node config:
+//
+//   SilverH3SegmentEditor - SECTION (crop) + SEGMENT (regenerated) ranges,
+//                           section unlimited.
+//   SilverH3VideoEditor   - one EDIT WINDOW range (the whole selected
+//                           section becomes <Video 1>), capped at 15 s, the
+//                           model's limit.
 //
 // All values are pushed back into the real ComfyUI widgets, so the workflow
 // serialises them and the Python node reads the exact same values.
@@ -12,14 +16,28 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-const NODE_ID = "SilverH3SegmentEditor";
-const RANGE_WIDGETS = [
-    "source_video",
-    "source_start",
-    "source_end",
-    "timeline_start",
-    "timeline_duration",
-];
+const CONFIGS = {
+    "SilverH3SegmentEditor": {
+        sectionLabel: "SECTION (main video used)",
+        segmentLabel: "SEGMENT (regenerated)",
+        segments: true,
+        minSpan: 0,
+        maxSpan: 0,
+    },
+    "SilverH3VideoEditor": {
+        sectionLabel: "EDIT WINDOW (\u2264 15s \u2013 the whole window is the <Video 1> reference)",
+        segmentLabel: null,
+        segments: false,
+        minSpan: 5.2,
+        maxSpan: 15,
+    },
+};
+
+function rangeWidgetsFor(cfg) {
+    return cfg.segments
+        ? ["source_video", "source_start", "source_end", "timeline_start", "timeline_duration"]
+        : ["source_video", "source_start", "source_end"];
+}
 
 const round1 = (v) => Math.round((Number(v) || 0) * 10) / 10;
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -142,22 +160,25 @@ function makeDualRange(options = {}) {
 
 // ---------------------------------------------------------------------------
 app.registerExtension({
-    name: "SilverH3.SegmentEditorPreview",
+    name: "SilverH3.VideoEditorPreview",
     beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== NODE_ID) return;
+        const cfg = CONFIGS[nodeData.name];
+        if (!cfg) return;
         const onCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             onCreated?.call(this);
             try {
-                initPreview(this);
+                initPreview(this, cfg);
             } catch (err) {
-                console.error("[SilverH3SegmentEditor] preview init failed:", err);
+                console.error("[SilverH3] preview init failed for " +
+                              nodeData.name + ":", err);
             }
         };
     },
 });
 
-function initPreview(node) {
+function initPreview(node, cfg) {
+    const RANGE_WIDGETS = rangeWidgetsFor(cfg);
     const W = {};
     for (const w of node.widgets || []) {
         if (RANGE_WIDGETS.includes(w.name)) W[w.name] = w;
@@ -208,7 +229,7 @@ function initPreview(node) {
     transport.appendChild(timeLbl);
     root.appendChild(transport);
 
-    // ---- SECTION (crop) + SEGMENT range rows ------------------------------
+    // ---- range rows -------------------------------------------------------
     function rangeRow(label, color) {
         const row = document.createElement("div");
         row.style.cssText = "margin:2px 0 6px;";
@@ -245,10 +266,10 @@ function initPreview(node) {
         return { row, dual, loInput, hiInput, nums };
     }
 
-    const section = rangeRow("SECTION (main video used)", "#8fdfff");
-    const segment = rangeRow("SEGMENT (regenerated)", "#b3ff00");
+    const section = rangeRow(cfg.sectionLabel, "#8fdfff");
+    const segment = cfg.segments ? rangeRow(cfg.segmentLabel, "#b3ff00") : null;
     root.appendChild(section.row);
-    root.appendChild(segment.row);
+    if (segment) root.appendChild(segment.row);
 
     // ---- open / upload ----------------------------------------------------
     const openBtn = document.createElement("button");
@@ -265,8 +286,8 @@ function initPreview(node) {
 
     const domWidget = node.addDOMWidget("segment_preview", "preview", root, {
         serialize: false,
-        getMinHeight: () => 430,
-        getMaxHeight: () => 620,
+        getMinHeight: () => (cfg.segments ? 430 : 390),
+        getMaxHeight: () => (cfg.segments ? 620 : 520),
         hideOnZoom: false,
     });
 
@@ -299,6 +320,7 @@ function initPreview(node) {
         let hi = round1(W.source_end.value);
         if (hi <= 0) hi = dur; // 0 = "to the end"
         hi = clamp(hi, lo, dur);
+        if (cfg.maxSpan > 0 && hi - lo > cfg.maxSpan) hi = lo + cfg.maxSpan;
         return { lo, hi, dur };
     }
 
@@ -323,13 +345,15 @@ function initPreview(node) {
                 ? `[${round1(sec.lo)} \u2013 ${sec.hi >= dur ? "end" : round1(sec.hi)}]s`
                 : "";
 
-        const [s0, d0] = clampSegInSection(sec);
-        segment.dual.setBounds(sec.lo, Math.max(sec.lo, sec.hi), 0.1);
-        segment.dual.set(s0, s0 + d0);
-        segment.loInput.value = s0;
-        segment.hiInput.value = round1(d0);
-        segment.nums.textContent =
-            dur > 0 ? `${round1(s0)} \u2192 ${round1(s0 + d0)}s (+${round1(d0)}s)` : "";
+        if (segment) {
+            const [s0, d0] = clampSegInSection(sec);
+            segment.dual.setBounds(sec.lo, Math.max(sec.lo, sec.hi), 0.1);
+            segment.dual.set(s0, s0 + d0);
+            segment.loInput.value = s0;
+            segment.hiInput.value = round1(d0);
+            segment.nums.textContent =
+                dur > 0 ? `${round1(s0)} \u2192 ${round1(s0 + d0)}s (+${round1(d0)}s)` : "";
+        }
     }
 
     function pushWidget(name, value) {
@@ -343,6 +367,7 @@ function initPreview(node) {
     function sliderState() {
         const dur = getDuration();
         const [slo, shi] = section.dual.get();
+        if (!segment) return { dur, slo, shi };
         const [glo, ghi] = segment.dual.get();
         return { dur, slo, shi, glo, ghi };
     }
@@ -351,19 +376,23 @@ function initPreview(node) {
     // positions. Independent of the node widgets so a drag always shows.
     function writeFields(s) {
         section.loInput.value = round1(s.slo);
+        // For the video editor the window end is always a concrete time; for
+        // the segment editor it is shown as 0 = "to the end" at video end.
         section.hiInput.value =
-            s.dur > 0 && s.shi >= s.dur - 1e-6 ? 0 : round1(s.shi);
+            s.dur > 0 && cfg.segments && s.shi >= s.dur - 1e-6 ? 0 : round1(s.shi);
         section.nums.textContent =
             s.dur > 0
                 ? `[${round1(s.slo)} \u2013 ${s.shi >= s.dur ? "end" : round1(s.shi)}]s`
                 : "";
 
-        const segStart = round1(clamp(s.glo, s.slo, s.shi));
-        const segEnd = round1(clamp(s.ghi, segStart, s.shi));
-        segment.loInput.value = segStart;
-        segment.hiInput.value = round1(segEnd - segStart);
-        segment.nums.textContent =
-            s.dur > 0 ? `${round1(segStart)} \u2192 ${round1(segEnd)}s (+${round1(segEnd - segStart)}s)` : "";
+        if (segment) {
+            const segStart = round1(clamp(s.glo, s.slo, s.shi));
+            const segEnd = round1(clamp(s.ghi, segStart, s.shi));
+            segment.loInput.value = segStart;
+            segment.hiInput.value = round1(segEnd - segStart);
+            segment.nums.textContent =
+                s.dur > 0 ? `${round1(segStart)} \u2192 ${round1(segEnd)}s (+${round1(segEnd - segStart)}s)` : "";
+        }
     }
 
     function uiToWidgets() {
@@ -374,12 +403,16 @@ function initPreview(node) {
         S.syncing = true;
         try {
             pushWidget("source_start", round1(s.slo));
-            pushWidget("source_end", s.shi >= dur - 1e-6 ? 0 : round1(s.shi));
-
-            const segStart = clamp(s.glo, s.slo, s.shi);
-            const segEnd = clamp(s.ghi, segStart, s.shi);
-            pushWidget("timeline_start", round1(segStart));
-            pushWidget("timeline_duration", round1(Math.max(0.1, segEnd - segStart)));
+            // 0 = "to the end" only for the segment editor (kept for
+            // back-compat); the video editor always writes the concrete end.
+            pushWidget("source_end",
+                cfg.segments && s.shi >= dur - 1e-6 ? 0 : round1(s.shi));
+            if (segment) {
+                const segStart = clamp(s.glo, s.slo, s.shi);
+                const segEnd = clamp(s.ghi, segStart, s.shi);
+                pushWidget("timeline_start", round1(segStart));
+                pushWidget("timeline_duration", round1(Math.max(0.1, segEnd - segStart)));
+            }
         } finally {
             S.syncing = false;
         }
@@ -387,38 +420,81 @@ function initPreview(node) {
 
     section.dual.onInput(() => {
         if (getDuration() <= 0) return;
-        const [slo, shi] = section.dual.get();
-        const [glo, ghi] = segment.dual.get();
-        const len = Math.max(0.1, Math.min(shi - slo, ghi - glo));
-        const s = clamp(glo, slo, shi - len);
-        segment.dual.setBounds(slo, shi, 0.1);
-        segment.dual.set(s, s + len);
+        if (segment) {
+            const [slo, shi] = section.dual.get();
+            const [glo, ghi] = segment.dual.get();
+            const len = Math.max(0.1, Math.min(shi - slo, ghi - glo));
+            const s = clamp(glo, slo, shi - len);
+            segment.dual.setBounds(slo, shi, 0.1);
+            segment.dual.set(s, s + len);
+            writeFields(sliderState());
+            uiToWidgets();
+            widgetsToUI();
+            return;
+        }
+        // Video editor: keep the window within [minSpan, maxSpan] while it
+        // slides, held against the video's duration.
+        let [lo, hi] = section.dual.get();
+        const dur = getDuration();
+        if (cfg.maxSpan > 0 && hi - lo > cfg.maxSpan) {
+            hi = lo + cfg.maxSpan;
+            if (hi > dur) {
+                hi = dur;
+                lo = Math.max(0, hi - cfg.maxSpan);
+            }
+        }
+        if (cfg.minSpan > 0 && hi - lo < cfg.minSpan) {
+            hi = lo + cfg.minSpan;
+            if (hi > dur) {
+                hi = dur;
+                lo = Math.max(0, hi - cfg.minSpan);
+            }
+        }
+        section.dual.set(lo, hi);
         writeFields(sliderState());
         uiToWidgets();
         widgetsToUI();
     });
 
-    segment.dual.onInput(() => {
-        if (getDuration() <= 0) return;
-        writeFields(sliderState());
-        uiToWidgets();
-        widgetsToUI();
-    });
+    if (segment) {
+        segment.dual.onInput(() => {
+            if (getDuration() <= 0) return;
+            writeFields(sliderState());
+            uiToWidgets();
+            widgetsToUI();
+        });
+    }
 
-    for (const [name, dual, picker] of [
-        ["source_start", section.dual, section.loInput],
-        ["source_end", section.dual, section.hiInput],
-        ["timeline_start", segment.dual, segment.loInput],
-        ["timeline_duration", segment.dual, segment.hiInput],
-    ]) {
+    const pickers = [["source_start", section.dual, section.loInput]];
+    pickers.push(["source_end", section.dual, section.hiInput]);
+    if (segment) {
+        pickers.push(
+            ["timeline_start", segment.dual, segment.loInput],
+            ["timeline_duration", segment.dual, segment.hiInput]);
+    }
+
+    for (const [name, dual, picker] of pickers) {
         picker.addEventListener("change", () => {
             if (S.syncing) return;
             let v = round1(picker.value);
             const dur = getDuration();
-            if (name === "source_start") v = clamp(v, 0, dur || 0);
-            else if (name === "source_end")
-                v = dur > 0 && (v <= 0 || v >= dur) ? 0 : clamp(v, 0, dur);
-            else if (name === "timeline_start") {
+            if (name === "source_start") {
+                v = clamp(v, 0, dur || 0);
+                if (!segment && cfg.maxSpan > 0) {
+                    let end = v + cfg.maxSpan;
+                    if (cfg.minSpan > 0) end = v + cfg.minSpan;
+                    pushWidget("source_end", round1(clamp(end, 0, dur || 0)));
+                }
+            } else if (name === "source_end") {
+                if (dur > 0 && (v <= 0 || v >= dur)) v = dur;
+                v = clamp(v, 0, dur || 0);
+                if (!segment) {
+                    const s0 = clamp(round1(W.source_start.value) || 0, 0, dur || 0);
+                    if (cfg.maxSpan > 0) v = Math.min(v, s0 + cfg.maxSpan);
+                    if (cfg.minSpan > 0 && v - s0 < cfg.minSpan)
+                        v = Math.min(dur || 0, s0 + cfg.minSpan);
+                }
+            } else if (name === "timeline_start") {
                 const sec = sectionBounds();
                 v = clamp(v, sec.lo, sec.hi);
                 const dlen = round1(W.timeline_duration.value) || 0;
@@ -464,7 +540,7 @@ function initPreview(node) {
             S.duration = video.duration;
             seek.max = video.duration;
             seek.value = 0;
-            segmentsSeekToStart();
+            sectionsSeekToStart();
             widgetsToUI();
         };
         video.onerror = () => {
@@ -474,7 +550,7 @@ function initPreview(node) {
         };
     }
 
-    function segmentsSeekToStart() {
+    function sectionsSeekToStart() {
         const sec = sectionBounds();
         if (sec.lo > 0) video.currentTime = sec.lo;
     }
@@ -532,7 +608,7 @@ function initPreview(node) {
                 W.source_video.callback(value);
             loadFromWidget();
         } catch (err) {
-            console.error("[SilverH3SegmentEditor] upload failed:", err);
+            console.error("[SilverH3] upload failed:", err);
             status.textContent = "Upload failed - see browser console.";
         }
     });
@@ -542,7 +618,9 @@ function initPreview(node) {
         srcCb?.call(W.source_video, v);
         loadFromWidget();
     };
-    for (const name of ["source_start", "source_end", "timeline_start", "timeline_duration"]) {
+    const wired = ["source_start", "source_end"];
+    if (segment) wired.push("timeline_start", "timeline_duration");
+    for (const name of wired) {
         const widget = W[name];
         const old = widget.callback;
         widget.callback = (v) => {

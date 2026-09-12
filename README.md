@@ -4,6 +4,14 @@ A collection of utility nodes for ComfyUI that enhance workflow capabilities wit
 
 ![ComfyUI Silver Nodes](readme/Nodes.png)
 
+## Documentation
+
+The repo keeps deep-dive docs in companion markdown files alongside this README:
+
+- **H3BATCH.md** - living design/usage reference for the H3 Batch and Staged long-form nodes (continuity modes, audio spine, refs/keyframe conflict, griding). Updated as those nodes evolve.
+- **CHANGELOG.md** - detailed per-feature changelog (the README's changelog section is only the brief summary).
+- **PERFORMANCE_INVESTIGATION.md** - notes from a ComfyUI performance/VRAM-regression investigation on the developer's RTX 3060 box (driver/torch/hardware specifics and measurements).
+
 ## Features
 
 Silver Nodes provides several specialized nodes designed to improve your ComfyUI workflows:
@@ -112,7 +120,7 @@ Fetch random images from Flickr based on search criteria.
 
 ### Silver H3 Staged vs Silver H3 Batch
 
-Both nodes share the same staging backbone - text encoder, DiT and the video/audio VAEs each load **exactly once** for the whole run - but they are built for different jobs:
+Both nodes stage the work into the same three phases (encode -> sample -> decode) and cut the dominant cost the same way - the text encoder loads **exactly once** for the whole run. Only **Batch** keeps the full "each model loads exactly once" discipline (~2 swaps total). **Staged cannot**: its join chain works on decoded pixels (each finished shot's tail must be decoded and re-encoded as the next shot's keyframe/ref), and that forces a model swap at every join. They are built for different jobs:
 
 | | Staged Multishot | Batch |
 |---|---|---|
@@ -130,25 +138,25 @@ Both nodes share the same staging backbone - text encoder, DiT and the video/aud
 
 ### Silver H3 Staged Multishot
 
-A long-form MiniMax-H3 pipeline (video + audio, 24 fps) built around one observation: a naive per-shot chain (encode -> sample -> decode per clip) pays **three model swaps per shot**, because ComfyUI loads the text encoder for conditioning, evicts it for the DiT, then evicts that for the VAE - over and over. This node reorders the work into three phases so the load count is **constant regardless of shot count**.
+A long-form MiniMax-H3 pipeline (video + audio, 24 fps) built around one observation: a naive per-shot chain (encode -> sample -> decode per clip) pays **three model swaps per shot**, because ComfyUI loads the text encoder for conditioning, evicts it for the DiT, then evicts that for the VAE - over and over. This node reorders the work into three phases and cuts the biggest cost flat: the text encoder loads **exactly once** no matter how many shots, and full decode happens in a single Phase C. The one cost that cannot be scheduled away is the keyframe channel itself - it works on decoded pixels, so the video VAE must load mid-sampling and a **DiT <-> VAE swap occurs at every join** (shots 2+). See swap accounting below.
 
 #### How it works - three phases
 
 | Phase | Models hot | What happens |
 |---|---|---|
 | **A - ENCODE** | text encoder + video/audio VAE | Every prompt's conditioning is built in ONE text-encoder session. The character reference (image + voice) and shot-1 keyframe are VAE-encoded here, and the optional audio spine is encoded once. One controlled VRAM sweep ends the phase. |
-| **B - SAMPLE** | DiT (+ video VAE in first_frame mode) | Every shot is sampled back-to-back. Shots join IN LATENT SPACE or through the native keyframe channel (see continuity modes below). No mid-phase sweeps; the only in-phase VAE touch is a 1-frame plain decode per join (chain frame), which can never evict the DiT. |
+| **B - SAMPLE** | DiT (+ video VAE, swapped in per join) | Every shot is sampled back-to-back. Shots join IN LATENT SPACE or through the native keyframe channel (see continuity modes below). The join itself needs the video VAE - each finished shot's tail is decoded and re-encoded as the next shot's keyframe/ref - and loading the VAE mid-sampling forces a DiT <-> VAE swap at every join. |
 | **C - DECODE + SAVE** | VAEs | Each stored latent is decoded and **streamed** straight to disk as it goes - always ONE mp4 per shot (with that shot's audio) plus the combined master. Replayed join heads trimmed, audio seams crossfaded. One shot's frames in RAM at a time, never a full master tensor. |
 
-Strict swap accounting: **latent_handoff = exactly 2 swaps for the whole run** (TE -> DiT -> audio-VAE). `first_frame` additionally keeps the video VAE co-resident with the DiT during Phase B for the 1-frame chain decode (still constant per run, not per shot).
+Swap accounting: the text encoder loads **exactly once** for the whole run (all shot conditionings in one session - the largest of the three models). The join chain, however, makes a **DiT <-> VAE swap per join unavoidable**: the keyframe channel works on decoded pixels, so the VAE has to load while the DiT owns the card, evicting it - the next shot pays a reload. There is no "co-resident, swap-free" variant: decoding the keyframes IS the swap. What the staging buys you is that it stays ONE small VAE swinging in and out per join instead of the naive pipeline's three full model reloads per shot, and the text encoder never reloads between shots.
 
 #### Continuity modes
 
 How consecutive shots join. **The mode is implied by the inputs - the `continuity` widget is gone**:
 
-- **`first_frame`** - selected by PROVIDING `start_image`. Each shot opens on the previous shot's *actual last frame* through H3's native keyframe channel (the stock I2V path, chained). The model gets clean re-planning semantics: "here is a picture of frame 0." 1 duplicate frame trimmed per join. Requires decoding the tail of each finished shot (done as a 1-frame plain decode, hot, so the DiT stays resident).
+- **`first_frame`** - selected by PROVIDING `start_image`. Each shot opens on the previous shot's *actual last frame* through H3's native keyframe channel (the stock I2V path, chained). The model gets clean re-planning semantics: "here is a picture of frame 0." 1 duplicate frame trimmed per join. Requires decoding the tail of each finished shot - and that decode is exactly what forces the per-join DiT <-> VAE swap (the VAE must load while the DiT is resident, evicting it for the next shot).
   - **Keyframe/ref interaction**: `model_base.py:2173` overwrites `cond_video_latents` with ref block latents, destroying keyframe conditioning when both are present. A shot that carries a keyframe carries NO character refs: `start_image` + char refs are mutually exclusive, and when both are given the REFS are dropped with a warning (start-image chaining wins), so the keyframe stays clean.
-- **`latent_handoff`** (default when NO `start_image`) - zero decode: the previous shot's tail video rows / audio columns are locked into the next shot's trajectory at every sampling step (re-noised to the current sigma inside the packed stream). The new shot literally wakes up inside its own previous state - motion, exposure and speech carry. The replayed head (5+17x repeated rows) is regenerated and trimmed on join.
+- **`latent_handoff`** (default when NO `start_image`) - the previous shot's tail video rows / audio columns are locked into the next shot's trajectory at every sampling step (re-noised to the current sigma inside the packed stream). The new shot literally wakes up inside its own previous state - motion, exposure and speech carry. The replayed head (5+17x repeated rows) is regenerated and trimmed on join. This is **not decoder-free**: the tail is still decoded each shot to build the next shot's chain reference (and motion context), so it pays the same per-join swap.
 
 Why there is no "first_frame without decoding": H3's video latent mixes ~3.4 frames into each latent row (5 frames across 2 bootstrap rows, then 17 frames per 5-row block), pooled causally - the final frame has no isolated latent representation. The keyframe slot also expects an *image-mode* latent positioned outside the target timeline, while tail rows are continuation state. Converting between those regimes requires pixels; latent_handoff simply skips the keyframe channel instead.
 
@@ -156,7 +164,8 @@ Why there is no "first_frame without decoding": H3's video latent mixes ~3.4 fra
 |---|---|---|
 | Join mechanism | native keyframe channel | per-step noise-domain lock |
 | Model semantics | re-planning from a still | continuation of prior state |
-| VAE touches during sampling | 1-frame plain decode per join | none |
+| VAE touches during sampling | tail decode + keyframe re-encode per join | tail decode + chain-ref re-encode per join |
+| DiT <-> VAE swap per join | yes (unavoidable) | yes (unavoidable) |
 | Trim per join | 1 duplicate frame | 73-frame overlap |
 
 #### Character references (`char_refs_all` / `char_refs_index`)
@@ -199,8 +208,9 @@ A continuous audio track for the WHOLE take (voice recording, song, low-res long
 
 #### VRAM & model management notes
 
-- Sweeps happen only at phase boundaries, never mid-phase.
-- The only in-phase VAE decode is the 1-frame chain frame per join: a plain full-clip decode would make model management reserve the whole clip's footprint and evict the resident DiT. Full shots are decoded once, in Phase C, streamed and freed immediately.
+- One controlled sweep at each clean phase boundary (ENCODE -> SAMPLE, SAMPLE -> DECODE) **plus** the unavoidable DiT <-> VAE swap at every join, where the chain-frame decode forces the VAE to load while the DiT is resident.
+- The chain-frame work is deliberately kept to a 1-frame plain decode (plus one keyframe/ref re-encode) per join: a full-clip decode mid-sampling would make model management reserve the whole clip's footprint on top of the VAE. Full shots are still decoded once, in Phase C, streamed and freed immediately - after the final SAMPLE -> DECODE sweep the DiT is gone for good.
+- `latent_handoff` is not decoder-free either: the tail is decoded and re-encoded per shot for the chain reference, so it pays the same per-join swap.
 - No `soft_empty_cache()` between shots: it releases warm weight pages on DynamicVRAM/arena setups and would cost a full remap per shot.
 - Verbose `[SilverH3][dbg]` forensics are currently compiled in (`_DBG = True`) for the shot-2 color-block investigation; expect extra log lines.
 
@@ -221,7 +231,7 @@ Identical to the Batch node: ONE master prompt in `overall_prompt` (prepended to
 
 ### Silver H3 Batch
 
-Render **N independent** MiniMax-H3 videos (video + audio, 24 fps) from N independent prompts, keeping the same swap-minimising discipline as the staged multishot: the text encoder, DiT and VAE each load **exactly once** for the whole batch (2 model swaps total instead of ~3 x N). Every prompt is text-encoded in one TE session; the optional start/end keyframes and character refs (image + voice) are VAE-encoded once and reused; every video is sampled back-to-back with the DiT resident; every latent is decoded in one VAE session.
+Render **N independent** MiniMax-H3 videos (video + audio, 24 fps) from N independent prompts, keeping a strict one-load-per-model discipline: the text encoder, DiT and VAE each load **exactly once** for the whole batch (2 model swaps total instead of ~3 x N). Unlike Staged, Batch has no mid-sampling keyframe decodes - start/end keyframes and character refs are encoded once in Phase A - so the "no mid-phase swaps" claim holds unconditionally here. Every prompt is text-encoded in one TE session; the optional start/end keyframes and character refs (image + voice) are VAE-encoded once and reused; every video is sampled back-to-back with the DiT resident; every latent is decoded in one VAE session.
 
 #### Model requirements
 
@@ -284,6 +294,8 @@ Inputs are deliberately shaped around whole-sheet / positional semantics. These 
 - **Staged per-index start frames / end-keyframe easing** (planned, not built) and arbitrary per-shot identity swaps mid-take (same sparse-targeting gap as above).
 
 ### Silver WAN HuMo Batch
+
+> ⚠️ **Untested**: the developer has NOT run this node end-to-end. It is written against the WAN HuMo pipeline and code in a ComfyUI environment, but the audio-conditioning path, the HuMo audio-embed wiring and the model-management assumptions are all unverified - expect it to need fixes and to report errors until validated. Use it as a starting point, not as a proven node.
 
 Audio-conditioned talking-head / motion clips for the **WAN HuMo** model (e.g. `WAN-RVC-TalkingHed-1.3B`). WAN HuMo consumes audio as conditioning and does **not** generate a track - so the `guide_audio` is REQUIRED: it drives the lips/expression and is the clip's saved audio. Same staging discipline as the H3 Batch: text encoder, audio encoder, DiT and VAE each load once for the whole batch.
 
