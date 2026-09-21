@@ -1194,11 +1194,10 @@ class SilverFileTextLoader:
 class SilverFlickrRandomImage:
     """
     A ComfyUI node that fetches a random image from Flickr based on search criteria.
-    Uses the public Flickr API with a predefined API key.
+    Uses the public Flickr API with an API key provided by the user via the node input.
     """
     
     # Flickr API configuration
-    FLICKR_API_KEY = "REDACTED"
     FLICKR_API_BASE = "https://www.flickr.com/services/rest/"
     _history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'history', 'flickr_history.txt')
     _loaded_hashes = set()
@@ -1278,6 +1277,7 @@ class SilverFlickrRandomImage:
                 "safe_search": (["Safe", "Moderate", "Restricted"], {"default": "Safe"}),
                 "per_page": ("INT", {"default": 100, "min": 1, "max": 500, "display": "number"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 2**32-1, "display": "number"}),
+                "api_key": ("STRING", {"default": "", "multiline": False, "dynamicPrompts": False}),
             }
         }
     
@@ -1302,12 +1302,16 @@ class SilverFlickrRandomImage:
             return ""
         return ",".join(styles)
     
-    def fetch_image(self, text, min_upload_date, max_upload_date, orientation, styles, safe_search, per_page, seed=0):
+    def fetch_image(self, text, min_upload_date, max_upload_date, orientation, styles, safe_search, per_page, seed=0, api_key=""):
         """Fetch a random image from Flickr with retry logic and duplicate prevention.
         
         Args:
             seed: Random seed for reproducible results. If 0, uses system time.
+            api_key: User-provided Flickr API key (required; the node will not work without it).
         """
+        if not api_key.strip():
+            raise Exception("Flickr API key is required. Please provide your Flickr API key in the node's 'api_key' input.")
+            
         if seed > 0:
             random.seed(seed)
             
@@ -1338,7 +1342,7 @@ class SilverFlickrRandomImage:
                 # Build search parameters - request multiple sizes to ensure we get at least one
                 params = {
                     "method": "flickr.photos.search",
-                    "api_key": self.FLICKR_API_KEY,
+                    "api_key": api_key,
                     "text": text,
                     "min_upload_date": str(min_date),
                     "max_upload_date": str(max_date),
